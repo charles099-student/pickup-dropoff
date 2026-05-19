@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite'
+import { defineConfig as defineVitestConfig, mergeConfig } from 'vitest/config'
 import path from 'path'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
@@ -15,7 +16,7 @@ function figmaAssetResolver() {
   }
 }
 
-export default defineConfig({
+const viteConfig = defineConfig({
   plugins: [
     figmaAssetResolver(),
     // The React and Tailwind plugins are both required for Make, even if
@@ -36,3 +37,14 @@ export default defineConfig({
   // File types to support raw imports. Never add .css, .tsx, or .ts files to this.
   assetsInclude: ['**/*.svg', '**/*.csv'],
 })
+
+export default mergeConfig(
+  viteConfig,
+  defineVitestConfig({
+    test: {
+      globals: true,
+      environment: 'jsdom',
+      setupFiles: './src/test/setup.ts',
+    },
+  })
+)

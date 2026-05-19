@@ -808,7 +808,7 @@ export default function App() {
   }, [clearRouteOverlays, isMapReady, routePoints]);
 
   return (
-    <div ref={constraintsRef} className="relative w-full h-screen overflow-hidden bg-[#e5e3df]">
+    <div ref={constraintsRef} className="relative w-full h-[100dvh] overflow-hidden bg-[#e5e3df]">
       <div className="absolute inset-0 z-0">
         <div ref={mapContainerRef} className="h-full w-full" />
       </div>
@@ -818,7 +818,13 @@ export default function App() {
         <motion.div
           ref={boxRef}
           style={{ x, y }}
-          animate={shouldAnimateFloatingBoxHeight ? { height: floatingBoxHeight } : undefined}
+          animate={
+            isMobile
+              ? { height: isMobileFocused ? '100%' : 'auto' }
+              : shouldAnimateFloatingBoxHeight
+              ? { height: floatingBoxHeight }
+              : { height: 'auto' }
+          }
           drag={isFloatingBoxDraggable}
           dragConstraints={constraintsRef}
           dragControls={dragControls}
@@ -866,7 +872,7 @@ export default function App() {
 
             {/* Universal Drag Indicator */}
             <div
-              className={`absolute left-1/2 -translate-x-1/2 top-0 pt-3 pb-3 px-8 touch-none z-10 ${
+              className={`hidden md:block absolute left-1/2 -translate-x-1/2 top-0 pt-3 pb-3 px-8 touch-none z-10 ${
                 isFloatingBoxDraggable ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'
               }`}
               onPointerDown={(event) => {
