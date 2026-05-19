@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { Menu, MapPin, Navigation, ArrowDownUp, X, Clock, ChevronLeft, Home, Briefcase } from 'lucide-react';
 import { motion, AnimatePresence, useDragControls, useMotionValue } from 'motion/react';
 import maplibregl from 'maplibre-gl';
 import type { GeoJSONSource, Marker, StyleSpecification } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { requestRoute, parseRoutePath } from './routeApi';
+import { useIsMobile } from './components/ui/use-mobile';
 
 const OPENFREEMAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 const OSRM_ROUTE_BASE_URL = 'https://router.project-osrm.org/route/v1/driving';
@@ -12,6 +13,8 @@ const NOMINATIM_SEARCH_URL = 'https://nominatim.openstreetmap.org/search';
 const ROUTE_SOURCE_ID = 'route-line-source';
 const ROUTE_LAYER_ID = 'route-line-layer';
 const DEFAULT_CENTER = { lat: 22.3193, lng: 114.1694 };
+const THEME_HEAT = '#F26722';
+const THEME_ORANGE_PEEL = '#FEA000';
 
 type RouteStatus = 'idle' | 'submitting' | 'polling' | 'success' | 'error';
 type FocusedInput = 'pickup' | 'dropoff';
@@ -109,9 +112,9 @@ function createWaypointMarker(index: number) {
   element.style.width = '30px';
   element.style.height = '30px';
   element.style.borderRadius = '9999px';
-  element.style.background = '#111827';
+  element.style.background = THEME_HEAT;
   element.style.border = '2px solid #ffffff';
-  element.style.boxShadow = '0 8px 18px rgba(0, 0, 0, 0.25)';
+  element.style.boxShadow = '0 8px 18px rgba(242, 103, 34, 0.35)';
   element.style.color = '#ffffff';
   element.style.fontSize = '13px';
   element.style.fontWeight = '700';
@@ -171,6 +174,12 @@ async function fetchDrivingRouteGeometry(points: LatLngPoint[], signal: AbortSig
 export default function App() {
   const constraintsRef = useRef<HTMLDivElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
+  const boxContentRef = useRef<HTMLDivElement>(null);
+  const boxHeaderRef = useRef<HTMLDivElement>(null);
+  const boxMainContentRef = useRef<HTMLDivElement>(null);
+  const boxFooterRef = useRef<HTMLDivElement>(null);
+  const requestContentRef = useRef<HTMLDivElement>(null);
+  const settingsContentRef = useRef<HTMLDivElement>(null);
   const pickupInputRef = useRef<HTMLInputElement>(null);
   const dropoffInputRef = useRef<HTMLInputElement>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
@@ -185,7 +194,10 @@ export default function App() {
   const y = useMotionValue(0);
 
   const userTargetPos = useRef({ x: 0, y: 0 });
+  const requestPagePos = useRef({ x: 0, y: 0 });
+  const previousIsMenuOpen = useRef(false);
   const isDragging = useRef(false);
+  const isMobile = useIsMobile();
 
   const [focusedInput, setFocusedInput] = useState<FocusedInput | null>(null);
   const [pickup, setPickup] = useState('');
@@ -199,6 +211,7 @@ export default function App() {
     dropoff: [],
   });
   const [isMapReady, setIsMapReady] = useState(false);
+  const [floatingBoxHeight, setFloatingBoxHeight] = useState<number | null>(null);
 
   // New State for Home/Work feature
   const [savedLocations, setSavedLocations] = useState({ home: '', work: '' });
@@ -208,6 +221,8 @@ export default function App() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   const isRouteLoading = routeStatus === 'submitting' || routeStatus === 'polling';
+  const isFloatingBoxDraggable = !isMobile;
+  const shouldAnimateFloatingBoxHeight = !isMobile && floatingBoxHeight !== null;
 
   // Handle mobile full-screen mode when focused
   const isMobileFocused = focusedInput !== null;
@@ -244,6 +259,20 @@ export default function App() {
     setFocusedInput(null);
     resetRouteState();
   }, [resetRouteState, setInputValue]);
+
+  const clearAddressInput = useCallback((target: FocusedInput) => {
+    setInputValue(target, '');
+    setPlaceSuggestions((prev) => ({ ...prev, [target]: [] }));
+    resetRouteState();
+  }, [resetRouteState, setInputValue]);
+
+  const clearAllInputs = useCallback(() => {
+    setPickup('');
+    setDropoff('');
+    setFocusedInput(null);
+    setPlaceSuggestions({ pickup: [], dropoff: [] });
+    resetRouteState();
+  }, [resetRouteState]);
 
   const handleLocationSelect = (type: 'home' | 'work') => {
     const currentTarget = focusedInput || 'dropoff';
@@ -317,76 +346,171 @@ export default function App() {
     }
   };
 
-  // Automatically keep box within bounds on layout changes
+  const measureFloatingBoxHeight = useCallback(() => {
+    if (isMobile || !boxHeaderRef.current || !boxMainContentRef.current) {
+      setFloatingBoxHeight(null);
+      return;
+    }
+
+    const viewportHeight = constraintsRef.current?.getBoundingClientRect().height || window.innerHeight;
+    const maxHeight = Math.floor(viewportHeight * 0.85);
+    const footerHeight = !focusedInput && !isMenuOpen ? boxFooterRef.current?.offsetHeight ?? 0 : 0;
+    const activeContent = isMenuOpen ? settingsContentRef.current : requestContentRef.current;
+    const pageHeight = activeContent?.scrollHeight || boxMainContentRef.current.scrollHeight;
+    const naturalHeight = boxHeaderRef.current.offsetHeight + pageHeight + footerHeight;
+
+    setFloatingBoxHeight(Math.min(Math.ceil(naturalHeight), maxHeight));
+  }, [focusedInput, isMenuOpen, isMobile]);
+
+  useLayoutEffect(() => {
+    measureFloatingBoxHeight();
+  }, [
+    focusedInput,
+    isMenuOpen,
+    isRouteLoading,
+    pickup,
+    dropoff,
+    routeMessage,
+    routeSummary,
+    currentPlaceSuggestions.length,
+    savedLocations.home,
+    savedLocations.work,
+    measureFloatingBoxHeight,
+  ]);
+
   useEffect(() => {
-    let isRunning = true;
-    let frameId: number;
+    if (isMobile) {
+      return;
+    }
 
-    const loop = () => {
-      if (!isRunning) return;
-
-      if (boxRef.current && constraintsRef.current && !isDragging.current) {
-        const box = boxRef.current.getBoundingClientRect();
-        const bounds = constraintsRef.current.getBoundingClientRect();
-
-        const currentY = y.get();
-        const currentX = x.get();
-
-        // Calculate the "native" position without the current transform
-        const nativeTop = box.top - currentY;
-        const nativeBottom = box.bottom - currentY;
-        const nativeLeft = box.left - currentX;
-        const nativeRight = box.right - currentX;
-
-        let desiredY = userTargetPos.current.y;
-        let desiredX = userTargetPos.current.x;
-
-        // Keep within vertical bounds
-        if (nativeBottom - nativeTop <= bounds.height + 1) {
-          if (nativeBottom + desiredY > bounds.bottom) {
-            desiredY = bounds.bottom - nativeBottom;
-          }
-          if (nativeTop + desiredY < bounds.top) {
-            desiredY = bounds.top - nativeTop;
-          }
-        } else {
-          desiredY = bounds.top - nativeTop; // Pin to top if taller than screen
-        }
-
-        // Keep within horizontal bounds
-        if (nativeRight - nativeLeft <= bounds.width + 1) {
-          if (nativeRight + desiredX > bounds.right) {
-            desiredX = bounds.right - nativeRight;
-          }
-          if (nativeLeft + desiredX < bounds.left) {
-            desiredX = bounds.left - nativeLeft;
-          }
-        } else {
-          desiredX = bounds.left - nativeLeft;
-        }
-
-        // Use set() for immediate, un-animated updates since this runs every frame during the layout transition
-        if (currentY !== desiredY) y.set(desiredY);
-        if (currentX !== desiredX) x.set(desiredX);
-      }
-
-      frameId = requestAnimationFrame(loop);
-    };
-
-    loop();
-
-    // Give the layout transition 0.5s to fully finish expanding/shrinking
-    const timer = setTimeout(() => {
-      isRunning = false;
-      cancelAnimationFrame(frameId);
-    }, 500);
+    const frameId = window.requestAnimationFrame(measureFloatingBoxHeight);
+    const timerId = window.setTimeout(measureFloatingBoxHeight, 180);
 
     return () => {
-      isRunning = false;
-      cancelAnimationFrame(frameId);
-      clearTimeout(timer);
+      window.cancelAnimationFrame(frameId);
+      window.clearTimeout(timerId);
     };
-  }, [focusedInput, isMenuOpen, setupModal, pickup, dropoff, routeMessage, y, x]);
+  }, [focusedInput, isMenuOpen, isMobile, measureFloatingBoxHeight]);
+
+  useEffect(() => {
+    if (isMobile) {
+      setFloatingBoxHeight(null);
+      return;
+    }
+
+    const resizeObserver = new ResizeObserver(() => {
+      measureFloatingBoxHeight();
+    });
+
+    [
+      boxHeaderRef.current,
+      boxMainContentRef.current,
+      boxFooterRef.current,
+      requestContentRef.current,
+      settingsContentRef.current,
+    ].forEach((element) => {
+      if (element) {
+        resizeObserver.observe(element);
+      }
+    });
+
+    const frameId = window.requestAnimationFrame(measureFloatingBoxHeight);
+    const timerId = window.setTimeout(measureFloatingBoxHeight, 260);
+
+    return () => {
+      resizeObserver.disconnect();
+      window.cancelAnimationFrame(frameId);
+      window.clearTimeout(timerId);
+    };
+  }, [isMobile, measureFloatingBoxHeight, focusedInput, isMenuOpen]);
+
+  const clampFloatingBoxToBounds = useCallback(() => {
+    if (!boxRef.current || !constraintsRef.current || isDragging.current) {
+      return;
+    }
+
+    const box = boxRef.current.getBoundingClientRect();
+    const bounds = constraintsRef.current.getBoundingClientRect();
+    const currentY = y.get();
+    const currentX = x.get();
+
+    const nativeTop = box.top - currentY;
+    const nativeBottom = box.bottom - currentY;
+    const nativeLeft = box.left - currentX;
+    const nativeRight = box.right - currentX;
+
+    let desiredY = userTargetPos.current.y;
+    let desiredX = userTargetPos.current.x;
+
+    if (nativeBottom - nativeTop <= bounds.height + 1) {
+      if (nativeBottom + desiredY > bounds.bottom) {
+        desiredY = bounds.bottom - nativeBottom;
+      }
+      if (nativeTop + desiredY < bounds.top) {
+        desiredY = bounds.top - nativeTop;
+      }
+    } else {
+      desiredY = bounds.top - nativeTop;
+    }
+
+    if (nativeRight - nativeLeft <= bounds.width + 1) {
+      if (nativeRight + desiredX > bounds.right) {
+        desiredX = bounds.right - nativeRight;
+      }
+      if (nativeLeft + desiredX < bounds.left) {
+        desiredX = bounds.left - nativeLeft;
+      }
+    } else {
+      desiredX = bounds.left - nativeLeft;
+    }
+
+    if (currentY !== desiredY) {
+      y.set(desiredY);
+    }
+    if (currentX !== desiredX) {
+      x.set(desiredX);
+    }
+    userTargetPos.current = { x: desiredX, y: desiredY };
+  }, [x, y]);
+
+  // Keep a dragged panel in bounds without forcing layout reads during every animation frame.
+  useEffect(() => {
+    const frameId = window.requestAnimationFrame(clampFloatingBoxToBounds);
+    const timerId = window.setTimeout(clampFloatingBoxToBounds, 220);
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.clearTimeout(timerId);
+    };
+  }, [clampFloatingBoxToBounds, setupModal, routeMessage]);
+
+  useEffect(() => {
+    if (isMobile) {
+      isDragging.current = false;
+      x.set(0);
+      y.set(0);
+      userTargetPos.current = { x: 0, y: 0 };
+      requestPagePos.current = { x: 0, y: 0 };
+      previousIsMenuOpen.current = isMenuOpen;
+      return;
+    }
+
+    if (isMenuOpen && !previousIsMenuOpen.current) {
+      requestPagePos.current = { x: userTargetPos.current.x, y: userTargetPos.current.y };
+      x.set(requestPagePos.current.x);
+      y.set(requestPagePos.current.y);
+    }
+
+    if (!isMenuOpen && previousIsMenuOpen.current) {
+      const restoredPosition = requestPagePos.current;
+      userTargetPos.current = restoredPosition;
+      x.set(restoredPosition.x);
+      y.set(restoredPosition.y);
+      window.requestAnimationFrame(clampFloatingBoxToBounds);
+    }
+
+    previousIsMenuOpen.current = isMenuOpen;
+  }, [clampFloatingBoxToBounds, isMenuOpen, isMobile, x, y]);
 
   useEffect(() => {
     let cancelled = false;
@@ -585,72 +709,88 @@ export default function App() {
       {/* Floating UI Container */}
       <div className="absolute inset-0 z-10 pointer-events-none">
         <motion.div
-          layout
           ref={boxRef}
           style={{ x, y }}
-          drag
+          animate={shouldAnimateFloatingBoxHeight ? { height: floatingBoxHeight } : undefined}
+          drag={isFloatingBoxDraggable}
           dragConstraints={constraintsRef}
           dragControls={dragControls}
           dragListener={false}
           dragMomentum={false}
           dragElastic={0.2}
           dragTransition={{ bounceStiffness: 400, bounceDamping: 25 }}
-          onDragStart={() => { isDragging.current = true; }}
+          onDragStart={() => { if (isFloatingBoxDraggable) isDragging.current = true; }}
           onDragEnd={() => {
             isDragging.current = false;
             userTargetPos.current = { x: x.get(), y: y.get() };
+            if (!isMenuOpen) {
+              requestPagePos.current = userTargetPos.current;
+            }
           }}
-          transition={{ type: "spring", bounce: 0, duration: 0.3 }}
-          className={`bg-white pointer-events-auto shadow-2xl flex flex-col overflow-hidden absolute
+          transition={{ height: { duration: 0.22, ease: [0.22, 1, 0.36, 1] } }}
+          className={`bg-white pointer-events-auto shadow-2xl flex flex-col overflow-hidden absolute md:top-8 md:right-auto md:bottom-auto md:left-8 md:w-[400px] md:h-auto md:max-h-[85vh] md:rounded-3xl
             ${isMobileFocused
-              ? 'inset-0 md:inset-auto md:top-8 md:left-8 md:w-[400px] h-full md:h-auto md:max-h-[85vh] md:rounded-3xl'
-              : 'bottom-0 md:bottom-auto md:top-8 left-0 md:left-8 w-full md:w-[400px] h-auto mt-auto md:mt-0 rounded-t-3xl md:rounded-3xl max-h-[85vh]'
+              ? 'inset-0 h-full rounded-none'
+              : 'bottom-0 left-0 w-full h-auto mt-auto rounded-t-3xl max-h-[85vh]'
             }
           `}
         >
-          {/* Header */}
-          <motion.div layout transition={{ type: "spring", bounce: 0, duration: 0.3 }} className={`flex items-center justify-between px-4 py-3 md:pt-5 border-b border-gray-100 relative ${isMobileFocused ? 'bg-white' : ''}`}>
+          <div ref={boxContentRef} className="flex h-full min-h-0 flex-col">
+            {/* Header */}
+            <div ref={boxHeaderRef} className={`flex shrink-0 items-center justify-between px-4 py-3 md:pt-5 border-b border-gray-100 relative ${isMobileFocused ? 'bg-white' : ''}`}>
             {isMobileFocused ? (
               <button
                 onClick={() => { setFocusedInput(null); setIsMenuOpen(false); }}
-                className="p-2 hover:bg-gray-100 rounded-full transition-colors z-10"
+                aria-label="Back"
+                className="p-2 hover:bg-[#FEA000]/15 hover:text-[#F26722] rounded-full transition-colors z-10"
               >
                 <ChevronLeft size={24} />
               </button>
             ) : isMenuOpen ? (
               <button
                 onClick={() => setIsMenuOpen(false)}
-                className="p-2 hover:bg-gray-100 rounded-full transition-colors z-10"
+                aria-label="Back"
+                className="p-2 hover:bg-[#FEA000]/15 hover:text-[#F26722] rounded-full transition-colors z-10"
               >
                 <ChevronLeft size={24} />
               </button>
             ) : (
-              <button onClick={() => setIsMenuOpen(true)} className="p-2 hover:bg-gray-100 rounded-full transition-colors z-10">
+              <button onClick={() => setIsMenuOpen(true)} aria-label="Open Settings" className="p-2 hover:bg-[#FEA000]/15 hover:text-[#F26722] rounded-full transition-colors z-10">
                 <Menu size={24} />
               </button>
             )}
 
             {/* Universal Drag Indicator */}
             <div
-              className="absolute left-1/2 -translate-x-1/2 top-0 pt-3 pb-3 px-8 cursor-grab active:cursor-grabbing touch-none z-10"
-              onPointerDown={(e) => dragControls.start(e)}
+              className={`absolute left-1/2 -translate-x-1/2 top-0 pt-3 pb-3 px-8 touch-none z-10 ${
+                isFloatingBoxDraggable ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'
+              }`}
+              onPointerDown={(event) => {
+                if (isFloatingBoxDraggable) {
+                  dragControls.start(event);
+                }
+              }}
             >
               <div className="w-12 h-1.5 bg-gray-300 rounded-full hover:bg-gray-400 transition-colors" />
             </div>
-          </motion.div>
+            </div>
 
-          {/* Main Content */}
-          <motion.div layout transition={{ type: "spring", bounce: 0, duration: 0.3 }} className="flex-1 overflow-y-auto bg-white flex flex-col relative overflow-hidden">
-            <AnimatePresence mode="popLayout" initial={false}>
+            {/* Main Content */}
+            <div ref={boxMainContentRef} className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-white relative">
+            <AnimatePresence mode="wait" initial={false}>
             {isMenuOpen ? (
               <motion.div
-                layout
+                ref={settingsContentRef}
                 key="settings"
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
-                transition={{ layout: { type: "spring", bounce: 0, duration: 0.3 }, duration: 0.2 }}
-                className="flex flex-col h-full w-full"
+                initial={{ opacity: 0, x: -26, scale: 0.98 }}
+                animate={{ opacity: 1, x: 0, scale: 1 }}
+                exit={{ opacity: 0, x: -18, scale: 0.99 }}
+                transition={{
+                  opacity: { duration: 0.12, ease: "easeOut" },
+                  x: { type: "spring", stiffness: 520, damping: 24, mass: 0.65 },
+                  scale: { type: "spring", stiffness: 520, damping: 24, mass: 0.65 },
+                }}
+                className="flex w-full flex-col will-change-transform"
               >
                 <div className="p-5 flex-shrink-0">
                   <h1 className="text-2xl font-bold mb-6 hidden md:block">Settings</h1>
@@ -662,7 +802,7 @@ export default function App() {
                       <div className="space-y-4">
                         <div className="flex items-center justify-between group">
                           <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center text-gray-600">
+                            <div className="w-10 h-10 bg-[#FEA000]/15 rounded-full flex items-center justify-center text-[#F26722]">
                               <Home size={18} />
                             </div>
                             <div>
@@ -676,7 +816,7 @@ export default function App() {
                               setSetupAddress(savedLocations.home || '');
                               setSetupModal('home');
                             }}
-                            className="text-sm text-blue-600 font-semibold px-3 py-1.5 hover:bg-blue-50 rounded-lg transition-colors"
+                            className="text-sm text-[#F26722] font-semibold px-3 py-1.5 hover:bg-[#FEA000]/15 hover:text-[#d95716] rounded-lg transition-colors"
                           >
                             {savedLocations.home ? 'Edit' : 'Add'}
                           </button>
@@ -684,7 +824,7 @@ export default function App() {
 
                         <div className="flex items-center justify-between group">
                           <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center text-gray-600">
+                            <div className="w-10 h-10 bg-[#FEA000]/15 rounded-full flex items-center justify-center text-[#F26722]">
                               <Briefcase size={18} />
                             </div>
                             <div>
@@ -698,7 +838,7 @@ export default function App() {
                               setSetupAddress(savedLocations.work || '');
                               setSetupModal('work');
                             }}
-                            className="text-sm text-blue-600 font-semibold px-3 py-1.5 hover:bg-blue-50 rounded-lg transition-colors"
+                            className="text-sm text-[#F26722] font-semibold px-3 py-1.5 hover:bg-[#FEA000]/15 hover:text-[#d95716] rounded-lg transition-colors"
                           >
                             {savedLocations.work ? 'Edit' : 'Add'}
                           </button>
@@ -710,13 +850,17 @@ export default function App() {
               </motion.div>
             ) : (
               <motion.div
-                layout
+                ref={requestContentRef}
                 key="request"
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 20 }}
-                transition={{ layout: { type: "spring", bounce: 0, duration: 0.3 }, duration: 0.2 }}
-                className="flex flex-col h-full w-full"
+                initial={{ opacity: 0, x: 26, scale: 0.98 }}
+                animate={{ opacity: 1, x: 0, scale: 1 }}
+                exit={{ opacity: 0, x: 18, scale: 0.99 }}
+                transition={{
+                  opacity: { duration: 0.12, ease: "easeOut" },
+                  x: { type: "spring", stiffness: 520, damping: 24, mass: 0.65 },
+                  scale: { type: "spring", stiffness: 520, damping: 24, mass: 0.65 },
+                }}
+                className="flex w-full flex-col will-change-transform"
               >
                 {/* Ride Request Form */}
                 <div className="p-5 flex-shrink-0">
@@ -724,70 +868,74 @@ export default function App() {
 
               <div className="relative">
                 {/* Connecting Line */}
-                <div className="absolute left-[23px] top-[26px] bottom-[26px] w-[2px] bg-gray-300 z-0"></div>
+                <div className="absolute left-[23px] top-[26px] bottom-[26px] w-[2px] bg-[#FEA000]/45 z-0"></div>
 
                 <div className="space-y-3 relative z-10">
                   {/* Pickup Input */}
                   <div className="flex items-center gap-4">
                     <div className="flex items-center justify-center w-5">
-                      <div className="w-2 h-2 rounded-full bg-black"></div>
+                      <div className="w-2 h-2 rounded-full bg-[#F26722]"></div>
                     </div>
-                    <div className={`flex-1 bg-gray-100 rounded-xl flex items-center px-4 transition-all duration-200 ${focusedInput === 'pickup' ? 'bg-white ring-2 ring-black shadow-sm' : 'hover:bg-gray-200'}`}>
+                    <div className={`flex-1 bg-gray-100 rounded-xl flex items-center px-4 transition-all duration-200 ${focusedInput === 'pickup' ? 'bg-white ring-2 ring-[#F26722] shadow-sm' : 'hover:bg-[#FEA000]/15'}`}>
                       <input
                         ref={pickupInputRef}
                         type="text"
-                        placeholder="Pickup location"
+                        placeholder="Starting Location"
                         value={pickup}
                         onChange={(e) => {
                           setPickup(e.target.value);
                           resetRouteState();
                         }}
-                        className="w-full bg-transparent py-3.5 text-base font-medium focus:outline-none placeholder:text-gray-500 text-black"
+                        className="min-w-0 flex-1 bg-transparent py-3.5 text-base font-medium focus:outline-none placeholder:text-gray-500 text-black"
                         onFocus={() => setFocusedInput('pickup')}
                       />
-                      {pickup && (
-                        <button
-                          onClick={() => {
-                            setPickup('');
-                            resetRouteState();
-                          }}
-                          className="p-1 text-gray-400 hover:text-black rounded-full"
-                        >
-                          <X size={18} />
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        aria-label="Clear Pickup Location"
+                        aria-hidden={!pickup}
+                        tabIndex={pickup ? 0 : -1}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => clearAddressInput('pickup')}
+                        className={`ml-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-gray-400 transition-all hover:bg-[#FEA000]/20 hover:text-[#F26722] ${
+                          pickup ? 'opacity-100 scale-100' : 'pointer-events-none opacity-0 scale-90'
+                        }`}
+                      >
+                        <X size={18} />
+                      </button>
                     </div>
                   </div>
 
                   {/* Dropoff Input */}
                   <div className="flex items-center gap-4">
                     <div className="flex items-center justify-center w-5">
-                      <div className="w-2 h-2 bg-black"></div>
+                      <div className="w-2 h-2 bg-[#F26722]"></div>
                     </div>
-                    <div className={`flex-1 bg-gray-100 rounded-xl flex items-center px-4 transition-all duration-200 ${focusedInput === 'dropoff' ? 'bg-white ring-2 ring-black shadow-sm' : 'hover:bg-gray-200'}`}>
+                    <div className={`flex-1 bg-gray-100 rounded-xl flex items-center px-4 transition-all duration-200 ${focusedInput === 'dropoff' ? 'bg-white ring-2 ring-[#F26722] shadow-sm' : 'hover:bg-[#FEA000]/15'}`}>
                       <input
                         ref={dropoffInputRef}
                         type="text"
-                        placeholder="Where to?"
+                        placeholder="Drop-off Point"
                         value={dropoff}
                         onChange={(e) => {
                           setDropoff(e.target.value);
                           resetRouteState();
                         }}
-                        className="w-full bg-transparent py-3.5 text-base font-medium focus:outline-none placeholder:text-gray-500 text-black"
+                        className="min-w-0 flex-1 bg-transparent py-3.5 text-base font-medium focus:outline-none placeholder:text-gray-500 text-black"
                         onFocus={() => setFocusedInput('dropoff')}
                       />
-                      {dropoff && (
-                        <button
-                          onClick={() => {
-                            setDropoff('');
-                            resetRouteState();
-                          }}
-                          className="p-1 text-gray-400 hover:text-black rounded-full"
-                        >
-                          <X size={18} />
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        aria-label="Clear Drop-Off Location"
+                        aria-hidden={!dropoff}
+                        tabIndex={dropoff ? 0 : -1}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => clearAddressInput('dropoff')}
+                        className={`ml-2 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-gray-400 transition-all hover:bg-[#FEA000]/20 hover:text-[#F26722] ${
+                          dropoff ? 'opacity-100 scale-100' : 'pointer-events-none opacity-0 scale-90'
+                        }`}
+                      >
+                        <X size={18} />
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -800,10 +948,10 @@ export default function App() {
                     setDropoff(temp);
                     resetRouteState();
                   }}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 bg-gray-100 p-2 rounded-full hover:bg-gray-200 shadow-sm border border-gray-200 z-20 transition-transform active:scale-95"
-                  aria-label="Swap locations"
+                  className="absolute right-4 top-1/2 -translate-y-1/2 bg-white p-2 rounded-full hover:bg-[#fff7ed] shadow-sm border border-[#FEA000]/30 z-20 transition-transform active:scale-95"
+                  aria-label="Swap Locations"
                 >
-                  <ArrowDownUp size={16} className="text-gray-600" />
+                  <ArrowDownUp size={16} className="text-[#F26722]" />
                 </button>
               </div>
 
@@ -816,9 +964,9 @@ export default function App() {
                       <button
                         type="button"
                         onClick={() => handleSuggestionSelect('pickup', 'Current Location, Hong Kong')}
-                        className="w-full text-left flex items-center gap-4 cursor-pointer hover:bg-gray-50 p-3 -mx-3 rounded-xl transition-colors"
+                        className="w-full text-left flex items-center gap-4 cursor-pointer hover:bg-[#FEA000]/10 p-3 -mx-3 rounded-xl transition-colors"
                       >
-                        <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 shrink-0">
+                        <div className="w-10 h-10 bg-[#FEA000]/20 rounded-full flex items-center justify-center text-[#F26722] shrink-0">
                           <Navigation size={20} className="fill-current" />
                         </div>
                         <div className="flex-1 border-b border-gray-100 pb-4 mt-4">
@@ -828,30 +976,30 @@ export default function App() {
                     )}
 
                     {/* Home Option */}
-                    <button type="button" className="w-full text-left flex items-center gap-4 cursor-pointer hover:bg-gray-50 p-3 -mx-3 rounded-xl transition-colors" onClick={() => handleLocationSelect('home')}>
-                      <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center text-gray-600 shrink-0">
+                    <button type="button" className="w-full text-left flex items-center gap-4 cursor-pointer hover:bg-[#FEA000]/10 p-3 -mx-3 rounded-xl transition-colors" onClick={() => handleLocationSelect('home')}>
+                      <div className="w-10 h-10 bg-[#FEA000]/15 rounded-full flex items-center justify-center text-[#F26722] shrink-0">
                         <Home size={20} />
                       </div>
                       <div className="flex-1 border-b border-gray-100 pb-4 mt-4">
                         <div className="font-semibold text-gray-900 text-base">Home</div>
-                        <div className="text-sm text-gray-500 mt-0.5">{savedLocations.home || 'Set location'}</div>
+                        <div className="text-sm text-gray-500 mt-0.5">{savedLocations.home || 'Set Location'}</div>
                       </div>
                     </button>
 
                     {/* Work Option */}
-                    <button type="button" className="w-full text-left flex items-center gap-4 cursor-pointer hover:bg-gray-50 p-3 -mx-3 rounded-xl transition-colors" onClick={() => handleLocationSelect('work')}>
-                      <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center text-gray-600 shrink-0">
+                    <button type="button" className="w-full text-left flex items-center gap-4 cursor-pointer hover:bg-[#FEA000]/10 p-3 -mx-3 rounded-xl transition-colors" onClick={() => handleLocationSelect('work')}>
+                      <div className="w-10 h-10 bg-[#FEA000]/15 rounded-full flex items-center justify-center text-[#F26722] shrink-0">
                         <Briefcase size={20} />
                       </div>
                       <div className="flex-1 border-b border-gray-100 pb-4 mt-4">
                         <div className="font-semibold text-gray-900 text-base">Work</div>
-                        <div className="text-sm text-gray-500 mt-0.5">{savedLocations.work || 'Set location'}</div>
+                        <div className="text-sm text-gray-500 mt-0.5">{savedLocations.work || 'Set Location'}</div>
                       </div>
                     </button>
 
                     {/* Recent & Suggested Places */}
-                    <button type="button" onClick={() => handleSuggestionSelect(focusedInput, 'Hong Kong International Airport Terminal 1')} className="w-full text-left flex items-center gap-4 cursor-pointer hover:bg-gray-50 p-3 -mx-3 rounded-xl transition-colors">
-                      <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center text-gray-600 shrink-0">
+                    <button type="button" onClick={() => handleSuggestionSelect(focusedInput, 'Hong Kong International Airport Terminal 1')} className="w-full text-left flex items-center gap-4 cursor-pointer hover:bg-[#FEA000]/10 p-3 -mx-3 rounded-xl transition-colors">
+                      <div className="w-10 h-10 bg-[#FEA000]/15 rounded-full flex items-center justify-center text-[#F26722] shrink-0">
                         <Clock size={20} />
                       </div>
                       <div className="flex-1 border-b border-gray-100 pb-4 mt-4">
@@ -860,8 +1008,8 @@ export default function App() {
                       </div>
                     </button>
 
-                    <button type="button" onClick={() => handleSuggestionSelect(focusedInput, 'Innocentre, Hong Kong')} className="w-full text-left flex items-center gap-4 cursor-pointer hover:bg-gray-50 p-3 -mx-3 rounded-xl transition-colors">
-                      <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center text-gray-600 shrink-0">
+                    <button type="button" onClick={() => handleSuggestionSelect(focusedInput, 'Innocentre, Hong Kong')} className="w-full text-left flex items-center gap-4 cursor-pointer hover:bg-[#FEA000]/10 p-3 -mx-3 rounded-xl transition-colors">
+                      <div className="w-10 h-10 bg-[#FEA000]/15 rounded-full flex items-center justify-center text-[#F26722] shrink-0">
                         <MapPin size={20} />
                       </div>
                       <div className="flex-1 border-b border-gray-100 pb-4 mt-4">
@@ -870,8 +1018,8 @@ export default function App() {
                       </div>
                     </button>
 
-                    <button type="button" onClick={() => handleSuggestionSelect(focusedInput, 'Central, Hong Kong')} className="w-full text-left flex items-center gap-4 cursor-pointer hover:bg-gray-50 p-3 -mx-3 rounded-xl transition-colors">
-                      <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center text-gray-600 shrink-0">
+                    <button type="button" onClick={() => handleSuggestionSelect(focusedInput, 'Central, Hong Kong')} className="w-full text-left flex items-center gap-4 cursor-pointer hover:bg-[#FEA000]/10 p-3 -mx-3 rounded-xl transition-colors">
+                      <div className="w-10 h-10 bg-[#FEA000]/15 rounded-full flex items-center justify-center text-[#F26722] shrink-0">
                         <MapPin size={20} />
                       </div>
                       <div className="flex-1 border-b border-gray-100 pb-4 mt-4">
@@ -885,9 +1033,9 @@ export default function App() {
                         key={suggestion.id}
                         type="button"
                         onClick={() => handleSuggestionSelect(focusedInput, suggestion.address)}
-                        className="w-full text-left flex items-center gap-4 cursor-pointer hover:bg-gray-50 p-3 -mx-3 rounded-xl transition-colors"
+                        className="w-full text-left flex items-center gap-4 cursor-pointer hover:bg-[#FEA000]/10 p-3 -mx-3 rounded-xl transition-colors"
                       >
-                        <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center text-gray-600 shrink-0">
+                        <div className="w-10 h-10 bg-[#FEA000]/15 rounded-full flex items-center justify-center text-[#F26722] shrink-0">
                           <MapPin size={20} />
                         </div>
                         <div className="flex-1 border-b border-gray-100 pb-4 mt-4 min-w-0">
@@ -900,15 +1048,15 @@ export default function App() {
                 ) : (
                   <div className="space-y-4 animate-in fade-in duration-300">
                     <div className="flex gap-4">
-                      <button onClick={() => handleLocationSelect('home')} className="flex-1 bg-gray-100 hover:bg-gray-200 py-3.5 rounded-xl flex items-center justify-center gap-2.5 font-semibold text-sm transition-colors text-gray-800">
+                      <button onClick={() => handleLocationSelect('home')} className="flex-1 bg-[#FEA000]/15 hover:bg-[#FEA000]/25 py-3.5 rounded-xl flex items-center justify-center gap-2.5 font-semibold text-sm transition-colors text-[#F26722]">
                         <div className="w-7 h-7 bg-white rounded-full flex items-center justify-center shadow-sm">
-                          <Home size={14} className="text-black" />
+                          <Home size={14} className="text-[#F26722]" />
                         </div>
                         Home
                       </button>
-                      <button onClick={() => handleLocationSelect('work')} className="flex-1 bg-gray-100 hover:bg-gray-200 py-3.5 rounded-xl flex items-center justify-center gap-2.5 font-semibold text-sm transition-colors text-gray-800">
+                      <button onClick={() => handleLocationSelect('work')} className="flex-1 bg-[#FEA000]/15 hover:bg-[#FEA000]/25 py-3.5 rounded-xl flex items-center justify-center gap-2.5 font-semibold text-sm transition-colors text-[#F26722]">
                         <div className="w-7 h-7 bg-white rounded-full flex items-center justify-center shadow-sm">
-                          <Briefcase size={14} className="text-black" />
+                          <Briefcase size={14} className="text-[#F26722]" />
                         </div>
                         Work
                       </button>
@@ -923,17 +1071,17 @@ export default function App() {
             </motion.div>
             )}
             </AnimatePresence>
-          </motion.div>
+            </div>
 
-          {/* Footer Actions */}
-          <AnimatePresence mode="popLayout">
+            {/* Footer Actions */}
+            <AnimatePresence mode="popLayout" initial={false}>
           {!focusedInput && !isMenuOpen && (
             <motion.div
-              layout
+              ref={boxFooterRef}
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 20 }}
-              transition={{ layout: { type: "spring", bounce: 0, duration: 0.3 }, duration: 0.2 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.08, ease: "easeOut" }}
               className="p-5 bg-white border-t border-gray-100 rounded-b-3xl w-full"
             >
               {routeMessage && (
@@ -944,6 +1092,7 @@ export default function App() {
                       ? 'bg-green-50 text-green-700'
                       : 'bg-gray-100 text-gray-700'
                 }`}>
+                  {routeStatus === 'error' && <span aria-hidden="true">⚠︎ </span>}
                   {routeMessage}
                   {routeSummary && (
                     <div className="mt-1 text-xs font-medium opacity-80">
@@ -952,16 +1101,26 @@ export default function App() {
                   )}
                 </div>
               )}
-              <button
-                onClick={handleSearchRides}
-                disabled={isRouteLoading}
-                className="w-full bg-black text-white py-4 rounded-xl font-bold text-lg hover:bg-gray-800 transition-colors shadow-lg active:scale-[0.98] disabled:cursor-not-allowed disabled:bg-gray-500 disabled:active:scale-100"
-              >
-                {isRouteLoading ? 'Searching...' : 'Search rides'}
-              </button>
+              <div className="flex gap-3">
+                <button
+                  onClick={clearAllInputs}
+                  disabled={isRouteLoading || (!pickup && !dropoff && !routeMessage)}
+                  className="shrink-0 bg-red-50 text-red-700 px-4 py-4 rounded-xl font-bold text-base shadow-sm transition-all hover:bg-red-100 hover:text-red-800 hover:shadow-md active:scale-[0.98] active:bg-red-200 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400 disabled:shadow-none disabled:hover:bg-gray-100 disabled:hover:text-gray-400 disabled:hover:shadow-none disabled:active:scale-100"
+                >
+                  Clear All
+                </button>
+                <button
+                  onClick={handleSearchRides}
+                  disabled={isRouteLoading}
+                  className="flex-1 min-w-0 bg-[#F26722] text-white py-4 rounded-xl font-bold text-lg shadow-lg shadow-[#F26722]/25 transition-all hover:bg-[#d95716] hover:shadow-[#F26722]/35 active:scale-[0.98] active:bg-[#c94c10] disabled:cursor-not-allowed disabled:bg-gray-500 disabled:shadow-none disabled:active:scale-100"
+                >
+                  {isRouteLoading ? 'Searching...' : 'Search Routes'}
+                </button>
+              </div>
             </motion.div>
           )}
-          </AnimatePresence>
+            </AnimatePresence>
+          </div>
         </motion.div>
       </div>
 
@@ -978,13 +1137,13 @@ export default function App() {
               placeholder={`Enter ${setupModal} address`}
               value={setupAddress}
               onChange={(e) => setSetupAddress(e.target.value)}
-              className="w-full bg-gray-100 rounded-xl px-4 py-3.5 text-base font-medium focus:outline-none focus:ring-2 focus:ring-black mb-6 text-black placeholder:text-gray-500"
+              className="w-full bg-gray-100 rounded-xl px-4 py-3.5 text-base font-medium focus:outline-none focus:ring-2 focus:ring-[#F26722] mb-6 text-black placeholder:text-gray-500"
             />
 
             <div className="flex gap-3">
               <button
                 onClick={() => setSetupModal(null)}
-                className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-xl font-semibold transition-colors"
+                className="flex-1 py-3 bg-gray-100 hover:bg-[#FEA000]/15 hover:text-[#F26722] text-gray-800 rounded-xl font-semibold transition-colors"
               >
                 Cancel
               </button>
@@ -1004,7 +1163,7 @@ export default function App() {
                     }
                   }
                 }}
-                className="flex-1 py-3 bg-black hover:bg-gray-800 text-white rounded-xl font-semibold transition-colors"
+                className="flex-1 py-3 bg-[#F26722] hover:bg-[#d95716] active:bg-[#c94c10] text-white rounded-xl font-semibold transition-colors"
               >
                 Save
               </button>
