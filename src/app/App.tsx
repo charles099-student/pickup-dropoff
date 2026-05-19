@@ -26,6 +26,12 @@ type PlaceSuggestion = {
   secondary: string;
 };
 
+type CustomLocation = {
+  id: string;
+  name: string;
+  address: string;
+};
+
 type NominatimPlace = {
   osm_id: number;
   osm_type: string;
@@ -45,6 +51,10 @@ type OsrmRouteResponse = {
   }>;
 };
 
+/*
+ * Fetches the OpenFreeMap style configuration from a remote URL.
+ * Patches a specific layer ('building-3d') to ensure proper rendering in MapLibre by providing default coalesced (non-null) values.
+ */
 async function loadOpenFreeMapStyle() {
   const response = await fetch(OPENFREEMAP_STYLE_URL);
 
@@ -55,6 +65,7 @@ async function loadOpenFreeMapStyle() {
   const style = (await response.json()) as StyleSpecification;
   const building3dLayer = style.layers?.find((layer) => layer.id === 'building-3d');
 
+  // OpenFreeMap can return null building extrusion values; MapLibre expects numbers.
   if (building3dLayer?.type === 'fill-extrusion') {
     building3dLayer.paint = {
       ...building3dLayer.paint,
@@ -66,7 +77,13 @@ async function loadOpenFreeMapStyle() {
   return style;
 }
 
+/*
+ * Fix MapLibre's warnings about missing images.
+ * Injects a transparent 1x1 pixel for any requested image id that isn't found in the base style.
+ */
 function addTransparentMissingStyleImage(map: maplibregl.Map, id: string) {
+  // Some optional sprite ids are referenced by the style but not shipped.
+  // The transparent pixel keeps the map rendering while avoiding noisy warnings.
   if (map.hasImage(id)) {
     return;
   }
@@ -78,6 +95,9 @@ function addTransparentMissingStyleImage(map: maplibregl.Map, id: string) {
   });
 }
 
+/*
+ * Formats a metric (like distance or time) with thousand separators for better UI readability.
+ */
 function formatRouteMetric(value: number) {
   return new Intl.NumberFormat('en-US').format(value);
 }
@@ -90,11 +110,19 @@ function getErrorMessage(error: unknown) {
   return 'Something went wrong. Please try again.';
 }
 
+/*
+ * Returns a 1-based alphabetical or numerical label for map markers.
+ * First 26 markers get A-Z, subsequent markers fall back to numbers.
+ */
 function markerLabel(index: number) {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   return alphabet[index] || `${index + 1}`;
 }
 
+/*
+ * Generates an empty GeoJSON LineString feature.
+ * Used to initialize standard routing layers or seamlessly clear active routes.
+ */
 function emptyRouteFeature() {
   return {
     type: 'Feature' as const,
@@ -106,6 +134,10 @@ function emptyRouteFeature() {
   };
 }
 
+/*
+ * Creates a stylized HTML element to act as a MapLibre DOM marker point.
+ * Each marker is rendered with a styled bubble and labeled according to its sequence index.
+ */
 function createWaypointMarker(index: number) {
   const element = document.createElement('div');
   element.textContent = markerLabel(index);
@@ -124,6 +156,10 @@ function createWaypointMarker(index: number) {
   return element;
 }
 
+/*
+ * Transforms a raw Nominatim API geographic place object into a structured
+ * suggestion model suitable for UI address dropdowns.
+ */
 function formatSuggestion(place: NominatimPlace): PlaceSuggestion {
   const parts = place.display_name.split(',').map((part) => part.trim()).filter(Boolean);
   return {
@@ -134,6 +170,10 @@ function formatSuggestion(place: NominatimPlace): PlaceSuggestion {
   };
 }
 
+/*
+ * Queries the OSM (Nominatim) search endpoint with the user's location input
+ * and restructures the API response into a manageable PlaceSuggestion collection.
+ */
 async function fetchPlaceSuggestions(query: string, signal: AbortSignal) {
   const searchParams = new URLSearchParams({
     format: 'jsonv2',
@@ -153,7 +193,13 @@ async function fetchPlaceSuggestions(query: string, signal: AbortSignal) {
   return places.map(formatSuggestion);
 }
 
+/*
+ * Converts a set of unordered LatLng points into a connected routing geometry.
+ * Calls out to the public OSRM driving route API and extracts the visual polyline of the route.
+ */
 async function fetchDrivingRouteGeometry(points: LatLngPoint[], signal: AbortSignal) {
+  // The mock API returns ordered waypoints. OSRM converts those points into
+  // road-following geometry for the visible driving route.
   const coordinates = points.map((point) => `${point.lng},${point.lat}`).join(';');
   const response = await fetch(`${OSRM_ROUTE_BASE_URL}/${coordinates}?overview=full&geometries=geojson&steps=false`, { signal });
 
@@ -171,9 +217,16 @@ async function fetchDrivingRouteGeometry(points: LatLngPoint[], signal: AbortSig
   return routeCoordinates;
 }
 
+/*
+ * The primary application container rendering the Map and floating panel.
+ * Responsible for orchestrating search queries, coordinating address completion,
+ * requesting routes, and controlling UI transitions.
+ */
 export default function App() {
   const constraintsRef = useRef<HTMLDivElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
+
+  // These refs measure the floating panel's natural height
   const boxContentRef = useRef<HTMLDivElement>(null);
   const boxHeaderRef = useRef<HTMLDivElement>(null);
   const boxMainContentRef = useRef<HTMLDivElement>(null);
@@ -185,6 +238,9 @@ export default function App() {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<Marker[]>([]);
+
+  // Abort controllers prevent stale async responses from mutating state after
+  // a new search, autocomplete request, or route draw has started.
   const routeAbortControllerRef = useRef<AbortController | null>(null);
   const autocompleteAbortControllerRef = useRef<AbortController | null>(null);
   const drivingRouteAbortControllerRef = useRef<AbortController | null>(null);
@@ -193,6 +249,8 @@ export default function App() {
   const x = useMotionValue(0);
   const y = useMotionValue(0);
 
+  // Framer Motion owns the live transform; this ref stores the latest clamped
+  // drag target so layout changes do not snap the box back to an old position.
   const userTargetPos = useRef({ x: 0, y: 0 });
   const previousIsMenuOpen = useRef(false);
   const isDragging = useRef(false);
@@ -214,8 +272,12 @@ export default function App() {
 
   // New State for Home/Work feature
   const [savedLocations, setSavedLocations] = useState({ home: '', work: '' });
-  const [setupModal, setSetupModal] = useState<'home' | 'work' | null>(null);
+  const [customLocations, setCustomLocations] = useState<CustomLocation[]>([]);
+  const [setupModal, setSetupModal] = useState<'home' | 'work' | 'custom' | null>(null);
   const [setupAddress, setSetupAddress] = useState('');
+  const [setupName, setSetupName] = useState('');
+  const [editingCustomId, setEditingCustomId] = useState<string | null>(null);
+  const [setupError, setSetupError] = useState('');
   const [targetInput, setTargetInput] = useState<FocusedInput | 'menu'>('dropoff');
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
@@ -226,6 +288,9 @@ export default function App() {
   // Handle mobile full-screen mode when focused
   const isMobileFocused = focusedInput !== null;
 
+  /*
+   * Cleans up visible map overlays including the route lines and markers.
+   */
   const clearRouteOverlays = useCallback(() => {
     markersRef.current.forEach((marker) => marker.remove());
     markersRef.current = [];
@@ -234,6 +299,10 @@ export default function App() {
     source?.setData(emptyRouteFeature());
   }, []);
 
+  /*
+   * Entirely aborts any inflight API requests for routing and rests
+   * local route/app state elements back to initial configurations.
+   */
   const resetRouteState = useCallback(() => {
     routeAbortControllerRef.current?.abort();
     drivingRouteAbortControllerRef.current?.abort();
@@ -244,6 +313,10 @@ export default function App() {
     clearRouteOverlays();
   }, [clearRouteOverlays]);
 
+  /*
+   * Helper utility to dynamically update the value of either the pickup or 
+   * dropoff inputs.
+   */
   const setInputValue = useCallback((target: FocusedInput, value: string) => {
     if (target === 'pickup') {
       setPickup(value);
@@ -252,6 +325,10 @@ export default function App() {
     }
   }, []);
 
+  /*
+   * Updates an address field based on user selection, simultaneously clearing 
+   * suggestions, blurring focus, and wiping out any existing calculated route.
+   */
   const applySelectedAddress = useCallback((target: FocusedInput, value: string) => {
     setInputValue(target, value);
     setPlaceSuggestions((prev) => ({ ...prev, [target]: [] }));
@@ -259,12 +336,19 @@ export default function App() {
     resetRouteState();
   }, [resetRouteState, setInputValue]);
 
+  /*
+   * Removes typed content from an address field and resets route constraints.
+   */
   const clearAddressInput = useCallback((target: FocusedInput) => {
     setInputValue(target, '');
     setPlaceSuggestions((prev) => ({ ...prev, [target]: [] }));
     resetRouteState();
   }, [resetRouteState, setInputValue]);
 
+  /*
+   * Wipes every active user-typed query, selection states, suggestions, 
+   * and drawn routes across the whole application view.
+   */
   const clearAllInputs = useCallback(() => {
     setPickup('');
     setDropoff('');
@@ -273,14 +357,22 @@ export default function App() {
     resetRouteState();
   }, [resetRouteState]);
 
-  const handleLocationSelect = (type: 'home' | 'work') => {
+  /*
+   * Retrieves or begins setup for saved canonical addresses (like home or work).
+   * If established, fires `applySelectedAddress` automatically.
+   */
+  const handleLocationSelect = (type: 'home' | 'work' | 'custom', locationValue?: string) => {
     const currentTarget = focusedInput || 'dropoff';
-    if (savedLocations[type]) {
-      applySelectedAddress(currentTarget, savedLocations[type]);
-    } else {
-      setTargetInput(currentTarget);
-      setSetupAddress('');
-      setSetupModal(type);
+    if (locationValue) {
+      applySelectedAddress(currentTarget, locationValue);
+    } else if (type !== 'custom') {
+      if (savedLocations[type]) {
+        applySelectedAddress(currentTarget, savedLocations[type]);
+      } else {
+        setTargetInput(currentTarget);
+        setSetupAddress('');
+        setSetupModal(type);
+      }
     }
   };
 
@@ -290,6 +382,10 @@ export default function App() {
 
   const currentPlaceSuggestions = focusedInput ? placeSuggestions[focusedInput] : [];
 
+  /*
+   * Main form submission logic. Triggers the backend `requestRoute` simulation and, 
+   * via polling, sets active points for mapping until resolving into success or error.
+   */
   const handleSearchRides = async () => {
     const origin = pickup.trim();
     const destination = dropoff.trim();
@@ -312,6 +408,8 @@ export default function App() {
       setRoutePoints([]);
       clearRouteOverlays();
 
+      // requestRoute submits POST /route and polls GET /route/:token until the
+      // mock backend returns success or a terminal failure.
       const route = await requestRoute(
         origin,
         destination,
@@ -320,7 +418,7 @@ export default function App() {
         },
         () => {
           setRouteStatus('polling');
-          setRouteMessage('Calculating route...');
+          setRouteMessage('Searching route...');
         },
       );
       const points = parseRoutePath(route.path);
@@ -345,7 +443,14 @@ export default function App() {
     }
   };
 
+  /*
+   * Calculates the natural bounds layout required by Framer Motion. 
+   * Reads multiple wrapper sizes (mobile / desktops) simultaneously to enforce 
+   * proper panel height constraints without creating layout thrash.
+   */
   const measureFloatingBoxHeight = useCallback(() => {
+    // Desktop uses an animated fixed height for smooth frame resizing. Mobile
+    // uses native full-height/auto layout, so measurement is disabled there.
     if (isMobile || !boxHeaderRef.current || !boxMainContentRef.current) {
       setFloatingBoxHeight(null);
       return;
@@ -354,6 +459,8 @@ export default function App() {
     const viewportHeight = constraintsRef.current?.getBoundingClientRect().height || window.innerHeight;
     const maxHeight = Math.floor(viewportHeight * 0.85);
     const footerHeight = !focusedInput && !isMenuOpen ? boxFooterRef.current?.offsetHeight ?? 0 : 0;
+
+    // Measure the active page content directly
     const activeContent = isMenuOpen ? settingsContentRef.current : requestContentRef.current;
     const pageHeight = activeContent?.scrollHeight || boxMainContentRef.current.scrollHeight;
     const naturalHeight = boxHeaderRef.current.offsetHeight + pageHeight + footerHeight;
@@ -423,6 +530,10 @@ export default function App() {
     };
   }, [isMobile, measureFloatingBoxHeight, focusedInput, isMenuOpen]);
 
+  /*
+   * Snaps the floating interactive menu back into the browser's viewable canvas bounds if it is dragged outwards.
+   * Compares Framer Motion's X/Y properties with window boundary limits and transforms back natively.
+   */
   const clampFloatingBoxToBounds = useCallback(() => {
     if (!boxRef.current || !constraintsRef.current || isDragging.current) {
       return;
@@ -516,6 +627,7 @@ export default function App() {
           return;
         }
 
+        // MapLibre renders OpenFreeMap directly
         const map = new maplibregl.Map({
           container: mapContainerRef.current,
           style,
@@ -537,6 +649,8 @@ export default function App() {
         resizeObserver.observe(mapContainerRef.current);
 
         map.on('load', () => {
+          // Keep one GeoJSON source/layer alive and update its data after each
+          // successful route lookup.
           map.addSource(ROUTE_SOURCE_ID, {
             type: 'geojson',
             data: emptyRouteFeature(),
@@ -590,6 +704,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // Autocomplete is debounced and cancelled on every input change
+    // Older Nominatim responses cannot replace newer suggestions.
     const query = focusedInput === 'pickup' ? pickup.trim() : focusedInput === 'dropoff' ? dropoff.trim() : '';
 
     autocompleteAbortControllerRef.current?.abort();
@@ -622,6 +738,8 @@ export default function App() {
   }, [dropoff, focusedInput, pickup]);
 
   useEffect(() => {
+    // Render returned waypoints as markers first; OSRM then supplies the
+    // road-following line between those waypoint coordinates.
     let cancelled = false;
     const map = mapRef.current;
 
@@ -796,16 +914,26 @@ export default function App() {
                               <div className="text-xs text-gray-500 truncate max-w-[120px]">{savedLocations.home || 'Not set'}</div>
                             </div>
                           </div>
-                          <button
-                            onClick={() => {
-                              setTargetInput('menu');
-                              setSetupAddress(savedLocations.home || '');
-                              setSetupModal('home');
-                            }}
-                            className="text-sm text-[#F26722] font-semibold px-3 py-1.5 hover:bg-[#FEA000]/15 hover:text-[#d95716] rounded-lg transition-colors"
-                          >
-                            {savedLocations.home ? 'Edit' : 'Add'}
-                          </button>
+                          <div className="flex gap-1 border border-transparent group-hover:border-gray-100 rounded-lg p-0.5 transition-colors">
+                            {savedLocations.home && (
+                              <button
+                                onClick={() => setSavedLocations(prev => ({ ...prev, home: '' }))}
+                                className="text-sm text-red-600 font-semibold px-3 py-1.5 hover:bg-red-50 hover:text-red-700 rounded-md transition-colors"
+                              >
+                                Remove
+                              </button>
+                            )}
+                            <button
+                              onClick={() => {
+                                setTargetInput('menu');
+                                setSetupAddress(savedLocations.home || '');
+                                setSetupModal('home');
+                              }}
+                              className="text-sm text-[#F26722] font-semibold px-3 py-1.5 hover:bg-[#FEA000]/15 hover:text-[#d95716] rounded-md transition-colors"
+                            >
+                              {savedLocations.home ? 'Edit' : 'Add'}
+                            </button>
+                          </div>
                         </div>
 
                         <div className="flex items-center justify-between group">
@@ -818,17 +946,81 @@ export default function App() {
                               <div className="text-xs text-gray-500 truncate max-w-[120px]">{savedLocations.work || 'Not set'}</div>
                             </div>
                           </div>
+                          <div className="flex gap-1 border border-transparent group-hover:border-gray-100 rounded-lg p-0.5 transition-colors">
+                            {savedLocations.work && (
+                              <button
+                                onClick={() => setSavedLocations(prev => ({ ...prev, work: '' }))}
+                                className="text-sm text-red-600 font-semibold px-3 py-1.5 hover:bg-red-50 hover:text-red-700 rounded-md transition-colors"
+                              >
+                                Remove
+                              </button>
+                            )}
+                            <button
+                              onClick={() => {
+                                setTargetInput('menu');
+                                setSetupAddress(savedLocations.work || '');
+                                setSetupModal('work');
+                              }}
+                              className="text-sm text-[#F26722] font-semibold px-3 py-1.5 hover:bg-[#FEA000]/15 hover:text-[#d95716] rounded-md transition-colors"
+                            >
+                              {savedLocations.work ? 'Edit' : 'Add'}
+                            </button>
+                          </div>
+                        </div>
+                        
+                        {customLocations.map(loc => (
+                          <div key={loc.id} className="flex items-center justify-between group">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 bg-[#FEA000]/15 rounded-full flex items-center justify-center text-[#F26722]">
+                                <MapPin size={18} />
+                              </div>
+                              <div>
+                                <div className="font-semibold text-gray-900">{loc.name}</div>
+                                <div className="text-xs text-gray-500 truncate max-w-[120px]">{loc.address}</div>
+                              </div>
+                            </div>
+                            <div className="flex gap-1 border border-transparent group-hover:border-gray-100 rounded-lg p-0.5 transition-colors">
+                              <button
+                                onClick={() => setCustomLocations(prev => prev.filter(l => l.id !== loc.id))}
+                                className="text-sm text-red-600 font-semibold px-3 py-1.5 hover:bg-red-50 hover:text-red-700 rounded-md transition-colors"
+                              >
+                                Remove
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setTargetInput('menu');
+                                  setSetupName(loc.name);
+                                  setSetupAddress(loc.address);
+                                  setEditingCustomId(loc.id);
+                                  setSetupModal('custom');
+                                }}
+                                className="text-sm text-[#F26722] font-semibold px-3 py-1.5 hover:bg-[#FEA000]/15 hover:text-[#d95716] rounded-md transition-colors"
+                              >
+                                Edit
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+
+                        {customLocations.length < 5 && (
                           <button
                             onClick={() => {
                               setTargetInput('menu');
-                              setSetupAddress(savedLocations.work || '');
-                              setSetupModal('work');
+                              setSetupName('');
+                              setSetupAddress('');
+                              setEditingCustomId(null);
+                              setSetupModal('custom');
                             }}
-                            className="text-sm text-[#F26722] font-semibold px-3 py-1.5 hover:bg-[#FEA000]/15 hover:text-[#d95716] rounded-lg transition-colors"
+                            className="w-full text-left flex items-center gap-4 group transition-colors mt-2 p-1"
                           >
-                            {savedLocations.work ? 'Edit' : 'Add'}
+                            <div className="w-10 h-10 border-2 border-dashed border-gray-300 rounded-full flex items-center justify-center text-gray-400 group-hover:border-[#F26722] group-hover:text-[#F26722] transition-colors shrink-0">
+                              <span className="text-xl font-medium leading-none pb-0.5">+</span>
+                            </div>
+                            <div className="font-semibold text-gray-600 group-hover:text-[#F26722] transition-colors text-base">
+                              Add other location
+                            </div>
                           </button>
-                        </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -942,75 +1134,88 @@ export default function App() {
               </div>
 
               {/* Autocomplete / Suggestions */}
-              <div className="mt-6">
+              <div className="mt-4">
                 {focusedInput ? (
-                  <div className="space-y-1 animate-in fade-in slide-in-from-bottom-2 duration-200">
+                  <div className="space-y-0 animate-in fade-in slide-in-from-bottom-2 duration-200">
                     {/* Current Location Option */}
                     {focusedInput === 'pickup' && (
                       <button
                         type="button"
                         onClick={() => handleSuggestionSelect('pickup', 'Current Location, Hong Kong')}
-                        className="w-full text-left flex items-center gap-4 cursor-pointer hover:bg-[#FEA000]/10 p-3 -mx-3 rounded-xl transition-colors"
+                        className="w-full text-left flex items-center gap-3 cursor-pointer hover:bg-[#FEA000]/10 p-2 -mx-2 rounded-xl transition-colors"
                       >
-                        <div className="w-10 h-10 bg-[#FEA000]/20 rounded-full flex items-center justify-center text-[#F26722] shrink-0">
-                          <Navigation size={20} className="fill-current" />
+                        <div className="w-9 h-9 bg-[#FEA000]/20 rounded-full flex items-center justify-center text-[#F26722] shrink-0">
+                          <Navigation size={18} className="fill-current" />
                         </div>
-                        <div className="flex-1 border-b border-gray-100 pb-4 mt-4">
-                          <div className="font-semibold text-gray-900 text-base">Current Location</div>
+                        <div className="flex-1 border-b border-gray-100 pb-2 mt-2">
+                          <div className="font-semibold text-gray-900 text-[15px]">Current Location</div>
                         </div>
                       </button>
                     )}
 
                     {/* Home Option */}
-                    <button type="button" className="w-full text-left flex items-center gap-4 cursor-pointer hover:bg-[#FEA000]/10 p-3 -mx-3 rounded-xl transition-colors" onClick={() => handleLocationSelect('home')}>
-                      <div className="w-10 h-10 bg-[#FEA000]/15 rounded-full flex items-center justify-center text-[#F26722] shrink-0">
-                        <Home size={20} />
+                    <button type="button" className="w-full text-left flex items-center gap-3 cursor-pointer hover:bg-[#FEA000]/10 p-2 -mx-2 rounded-xl transition-colors" onClick={() => handleLocationSelect('home')}>
+                      <div className="w-9 h-9 bg-[#FEA000]/15 rounded-full flex items-center justify-center text-[#F26722] shrink-0">
+                        <Home size={18} />
                       </div>
-                      <div className="flex-1 border-b border-gray-100 pb-4 mt-4">
-                        <div className="font-semibold text-gray-900 text-base">Home</div>
-                        <div className="text-sm text-gray-500 mt-0.5">{savedLocations.home || 'Set Location'}</div>
+                      <div className="flex-1 border-b border-gray-100 pb-2 mt-2">
+                        <div className="font-semibold text-gray-900 text-[15px]">Home</div>
+                        <div className="text-xs text-gray-500 mt-0.5">{savedLocations.home || 'Set Location'}</div>
                       </div>
                     </button>
 
                     {/* Work Option */}
-                    <button type="button" className="w-full text-left flex items-center gap-4 cursor-pointer hover:bg-[#FEA000]/10 p-3 -mx-3 rounded-xl transition-colors" onClick={() => handleLocationSelect('work')}>
-                      <div className="w-10 h-10 bg-[#FEA000]/15 rounded-full flex items-center justify-center text-[#F26722] shrink-0">
-                        <Briefcase size={20} />
+                    <button type="button" className="w-full text-left flex items-center gap-3 cursor-pointer hover:bg-[#FEA000]/10 p-2 -mx-2 rounded-xl transition-colors" onClick={() => handleLocationSelect('work')}>
+                      <div className="w-9 h-9 bg-[#FEA000]/15 rounded-full flex items-center justify-center text-[#F26722] shrink-0">
+                        <Briefcase size={18} />
                       </div>
-                      <div className="flex-1 border-b border-gray-100 pb-4 mt-4">
-                        <div className="font-semibold text-gray-900 text-base">Work</div>
-                        <div className="text-sm text-gray-500 mt-0.5">{savedLocations.work || 'Set Location'}</div>
+                      <div className="flex-1 border-b border-gray-100 pb-2 mt-2">
+                        <div className="font-semibold text-gray-900 text-[15px]">Work</div>
+                        <div className="text-xs text-gray-500 mt-0.5">{savedLocations.work || 'Set Location'}</div>
                       </div>
                     </button>
+
+                    {/* Custom Places Option */}
+                    {customLocations.map(loc => (
+                      <button key={loc.id} type="button" className="w-full text-left flex items-center gap-3 cursor-pointer hover:bg-[#FEA000]/10 p-2 -mx-2 rounded-xl transition-colors" onClick={() => handleLocationSelect('custom', loc.address)}>
+                        <div className="w-9 h-9 bg-[#FEA000]/15 rounded-full flex items-center justify-center text-[#F26722] shrink-0">
+                          <MapPin size={18} />
+                        </div>
+                        <div className="flex-1 border-b border-gray-100 pb-2 mt-2 min-w-0">
+                          <div className="font-semibold text-gray-900 text-[15px]">{loc.name}</div>
+                          <div className="text-xs text-gray-500 mt-0.5 truncate">{loc.address}</div>
+                        </div>
+                      </button>
+                    ))}
 
                     {/* Recent & Suggested Places */}
-                    <button type="button" onClick={() => handleSuggestionSelect(focusedInput, 'Hong Kong International Airport Terminal 1')} className="w-full text-left flex items-center gap-4 cursor-pointer hover:bg-[#FEA000]/10 p-3 -mx-3 rounded-xl transition-colors">
-                      <div className="w-10 h-10 bg-[#FEA000]/15 rounded-full flex items-center justify-center text-[#F26722] shrink-0">
-                        <Clock size={20} />
+                    <button type="button" onClick={() => handleSuggestionSelect(focusedInput, 'Hong Kong International Airport Terminal 1')} className="w-full text-left flex items-center gap-3 cursor-pointer hover:bg-[#FEA000]/10 p-2 -mx-2 rounded-xl transition-colors">
+                      <div className="w-9 h-9 bg-[#FEA000]/15 rounded-full flex items-center justify-center text-[#F26722] shrink-0">
+                        <Clock size={18} />
                       </div>
-                      <div className="flex-1 border-b border-gray-100 pb-4 mt-4">
-                        <div className="font-semibold text-gray-900 text-base">Hong Kong International Airport Terminal 1</div>
-                        <div className="text-sm text-gray-500 mt-0.5">Chek Lap Kok, Hong Kong</div>
-                      </div>
-                    </button>
-
-                    <button type="button" onClick={() => handleSuggestionSelect(focusedInput, 'Innocentre, Hong Kong')} className="w-full text-left flex items-center gap-4 cursor-pointer hover:bg-[#FEA000]/10 p-3 -mx-3 rounded-xl transition-colors">
-                      <div className="w-10 h-10 bg-[#FEA000]/15 rounded-full flex items-center justify-center text-[#F26722] shrink-0">
-                        <MapPin size={20} />
-                      </div>
-                      <div className="flex-1 border-b border-gray-100 pb-4 mt-4">
-                        <div className="font-semibold text-gray-900 text-base">Innocentre</div>
-                        <div className="text-sm text-gray-500 mt-0.5">Kowloon Tong, Hong Kong</div>
+                      <div className="flex-1 border-b border-gray-100 pb-2 mt-2">
+                        <div className="font-semibold text-gray-900 text-[15px]">Hong Kong International Airport Terminal 1</div>
+                        <div className="text-xs text-gray-500 mt-0.5">Chek Lap Kok, Hong Kong</div>
                       </div>
                     </button>
 
-                    <button type="button" onClick={() => handleSuggestionSelect(focusedInput, 'Central, Hong Kong')} className="w-full text-left flex items-center gap-4 cursor-pointer hover:bg-[#FEA000]/10 p-3 -mx-3 rounded-xl transition-colors">
-                      <div className="w-10 h-10 bg-[#FEA000]/15 rounded-full flex items-center justify-center text-[#F26722] shrink-0">
-                        <MapPin size={20} />
+                    <button type="button" onClick={() => handleSuggestionSelect(focusedInput, 'Innocentre, Hong Kong')} className="w-full text-left flex items-center gap-3 cursor-pointer hover:bg-[#FEA000]/10 p-2 -mx-2 rounded-xl transition-colors">
+                      <div className="w-9 h-9 bg-[#FEA000]/15 rounded-full flex items-center justify-center text-[#F26722] shrink-0">
+                        <MapPin size={18} />
                       </div>
-                      <div className="flex-1 border-b border-gray-100 pb-4 mt-4">
-                        <div className="font-semibold text-gray-900 text-base">Central</div>
-                        <div className="text-sm text-gray-500 mt-0.5">Central, Hong Kong</div>
+                      <div className="flex-1 border-b border-gray-100 pb-2 mt-2">
+                        <div className="font-semibold text-gray-900 text-[15px]">Innocentre</div>
+                        <div className="text-xs text-gray-500 mt-0.5">Kowloon Tong, Hong Kong</div>
+                      </div>
+                    </button>
+
+                    <button type="button" onClick={() => handleSuggestionSelect(focusedInput, 'Central, Hong Kong')} className="w-full text-left flex items-center gap-3 cursor-pointer hover:bg-[#FEA000]/10 p-2 -mx-2 rounded-xl transition-colors">
+                      <div className="w-9 h-9 bg-[#FEA000]/15 rounded-full flex items-center justify-center text-[#F26722] shrink-0">
+                        <MapPin size={18} />
+                      </div>
+                      <div className="flex-1 border-b border-gray-100 pb-2 mt-2">
+                        <div className="font-semibold text-gray-900 text-[15px]">Central</div>
+                        <div className="text-xs text-gray-500 mt-0.5">Central, Hong Kong</div>
                       </div>
                     </button>
 
@@ -1019,14 +1224,14 @@ export default function App() {
                         key={suggestion.id}
                         type="button"
                         onClick={() => handleSuggestionSelect(focusedInput, suggestion.address)}
-                        className="w-full text-left flex items-center gap-4 cursor-pointer hover:bg-[#FEA000]/10 p-3 -mx-3 rounded-xl transition-colors"
+                        className="w-full text-left flex items-center gap-3 cursor-pointer hover:bg-[#FEA000]/10 p-2 -mx-2 rounded-xl transition-colors"
                       >
-                        <div className="w-10 h-10 bg-[#FEA000]/15 rounded-full flex items-center justify-center text-[#F26722] shrink-0">
-                          <MapPin size={20} />
+                        <div className="w-9 h-9 bg-[#FEA000]/15 rounded-full flex items-center justify-center text-[#F26722] shrink-0">
+                          <MapPin size={18} />
                         </div>
-                        <div className="flex-1 border-b border-gray-100 pb-4 mt-4 min-w-0">
-                          <div className="font-semibold text-gray-900 text-base truncate">{suggestion.label}</div>
-                          <div className="text-sm text-gray-500 mt-0.5 truncate">{suggestion.secondary || suggestion.address}</div>
+                        <div className="flex-1 border-b border-gray-100 pb-2 mt-2 min-w-0">
+                          <div className="font-semibold text-gray-900 text-[15px] truncate">{suggestion.label}</div>
+                          <div className="text-xs text-gray-500 mt-0.5 truncate">{suggestion.secondary || suggestion.address}</div>
                         </div>
                       </button>
                     ))}
@@ -1097,35 +1302,104 @@ export default function App() {
       {setupModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm transition-opacity">
           <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl animate-in fade-in zoom-in-95 duration-200">
-            <h2 className="text-xl font-bold mb-2">Set {setupModal === 'home' ? 'Home' : 'Work'} address</h2>
-            <p className="text-gray-500 text-sm mb-6">Enter a valid address to save it for future rides.</p>
+            <h2 className="text-xl font-bold mb-2">
+              {setupModal === 'custom' 
+                ? (editingCustomId ? 'Edit saved location' : 'Add custom location')
+                : `Set ${setupModal === 'home' ? 'Home' : 'Work'} address`
+              }
+            </h2>
+            <p className="text-gray-500 text-sm mb-4">Enter a valid address to save it for future rides.</p>
+
+            {setupError && (
+              <div className="bg-red-50 text-red-600 px-4 py-3 rounded-xl text-sm font-medium mb-4">
+                {setupError}
+              </div>
+            )}
+
+            {setupModal === 'custom' && (
+              <input
+                type="text"
+                autoFocus={true}
+                placeholder="Name (e.g., Gym, School)"
+                value={setupName}
+                onChange={(e) => {
+                  setSetupName(e.target.value);
+                  setSetupError('');
+                }}
+                className="w-full bg-gray-100 rounded-xl px-4 py-3.5 text-base font-medium focus:outline-none focus:ring-2 focus:ring-[#F26722] mb-3 text-black placeholder:text-gray-500"
+              />
+            )}
 
             <input
               type="text"
-              autoFocus
-              placeholder={`Enter ${setupModal} address`}
+              autoFocus={setupModal !== 'custom'}
+              placeholder={setupModal === 'custom' ? 'Address' : `Enter ${setupModal} address`}
               value={setupAddress}
-              onChange={(e) => setSetupAddress(e.target.value)}
+              onChange={(e) => {
+                setSetupAddress(e.target.value);
+                setSetupError('');
+              }}
               className="w-full bg-gray-100 rounded-xl px-4 py-3.5 text-base font-medium focus:outline-none focus:ring-2 focus:ring-[#F26722] mb-6 text-black placeholder:text-gray-500"
             />
 
             <div className="flex gap-3">
               <button
-                onClick={() => setSetupModal(null)}
+                onClick={() => {
+                  setSetupModal(null);
+                  setEditingCustomId(null);
+                  setSetupError('');
+                }}
                 className="flex-1 py-3 bg-gray-100 hover:bg-[#FEA000]/15 hover:text-[#F26722] text-gray-800 rounded-xl font-semibold transition-colors"
               >
                 Cancel
               </button>
               <button
                 onClick={() => {
-                  if (setupAddress.trim()) {
-                    setSavedLocations(prev => ({ ...prev, [setupModal]: setupAddress }));
-                    if (targetInput === 'pickup') {
-                      setPickup(setupAddress);
-                    } else if (targetInput === 'dropoff') {
-                      setDropoff(setupAddress);
+                  if (setupModal === 'custom') {
+                    if (!setupName.trim() && !setupAddress.trim()) {
+                      setSetupError('⚠︎ Please provide a name and an address.');
+                      return;
                     }
+                    if (!setupName.trim()) {
+                      setSetupError('⚠︎ Please provide a name for this location.');
+                      return;
+                    }
+                    if (!setupAddress.trim()) {
+                      setSetupError('⚠︎ Please provide an address.');
+                      return;
+                    }
+                  } else {
+                    if (!setupAddress.trim()) {
+                      setSetupError('⚠︎ Please provide a valid address.');
+                      return;
+                    }
+                  }
+
+                  if (setupAddress.trim() && (setupModal !== 'custom' || setupName.trim())) {
+                    if (setupModal === 'custom') {
+                      if (editingCustomId) {
+                        setCustomLocations(prev => prev.map(loc => loc.id === editingCustomId ? { ...loc, name: setupName.trim(), address: setupAddress.trim() } : loc));
+                      } else {
+                        setCustomLocations(prev => [...prev, { id: Date.now().toString(), name: setupName.trim(), address: setupAddress.trim() }]);
+                      }
+                      
+                      if (targetInput === 'pickup') {
+                        setPickup(setupAddress.trim());
+                      } else if (targetInput === 'dropoff') {
+                        setDropoff(setupAddress.trim());
+                      }
+                    } else {
+                      setSavedLocations(prev => ({ ...prev, [setupModal]: setupAddress.trim() }));
+                      if (targetInput === 'pickup') {
+                        setPickup(setupAddress.trim());
+                      } else if (targetInput === 'dropoff') {
+                        setDropoff(setupAddress.trim());
+                      }
+                    }
+                    
                     setSetupModal(null);
+                    setEditingCustomId(null);
+                    setSetupError('');
                     resetRouteState();
                     if (targetInput !== 'menu') {
                       setFocusedInput(null);
