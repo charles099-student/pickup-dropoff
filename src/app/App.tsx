@@ -194,7 +194,6 @@ export default function App() {
   const y = useMotionValue(0);
 
   const userTargetPos = useRef({ x: 0, y: 0 });
-  const requestPagePos = useRef({ x: 0, y: 0 });
   const previousIsMenuOpen = useRef(false);
   const isDragging = useRef(false);
   const isMobile = useIsMobile();
@@ -490,22 +489,12 @@ export default function App() {
       x.set(0);
       y.set(0);
       userTargetPos.current = { x: 0, y: 0 };
-      requestPagePos.current = { x: 0, y: 0 };
       previousIsMenuOpen.current = isMenuOpen;
       return;
     }
 
-    if (isMenuOpen && !previousIsMenuOpen.current) {
-      requestPagePos.current = { x: userTargetPos.current.x, y: userTargetPos.current.y };
-      x.set(requestPagePos.current.x);
-      y.set(requestPagePos.current.y);
-    }
-
     if (!isMenuOpen && previousIsMenuOpen.current) {
-      const restoredPosition = requestPagePos.current;
-      userTargetPos.current = restoredPosition;
-      x.set(restoredPosition.x);
-      y.set(restoredPosition.y);
+      userTargetPos.current = { x: x.get(), y: y.get() };
       window.requestAnimationFrame(clampFloatingBoxToBounds);
     }
 
@@ -723,12 +712,9 @@ export default function App() {
           onDragEnd={() => {
             isDragging.current = false;
             userTargetPos.current = { x: x.get(), y: y.get() };
-            if (!isMenuOpen) {
-              requestPagePos.current = userTargetPos.current;
-            }
           }}
           transition={{ height: { duration: 0.22, ease: [0.22, 1, 0.36, 1] } }}
-          className={`bg-white pointer-events-auto shadow-2xl flex flex-col overflow-hidden absolute md:top-8 md:right-auto md:bottom-auto md:left-8 md:w-[400px] md:h-auto md:max-h-[85vh] md:rounded-3xl
+          className={`bg-white/80 backdrop-blur-xl pointer-events-auto shadow-2xl flex flex-col overflow-hidden absolute border border-white/40 md:top-8 md:right-auto md:bottom-auto md:left-8 md:w-[400px] md:h-auto md:max-h-[85vh] md:rounded-3xl
             ${isMobileFocused
               ? 'inset-0 h-full rounded-none'
               : 'bottom-0 left-0 w-full h-auto mt-auto rounded-t-3xl max-h-[85vh]'
@@ -737,7 +723,7 @@ export default function App() {
         >
           <div ref={boxContentRef} className="flex h-full min-h-0 flex-col">
             {/* Header */}
-            <div ref={boxHeaderRef} className={`flex shrink-0 items-center justify-between px-4 py-3 md:pt-5 border-b border-gray-100 relative ${isMobileFocused ? 'bg-white' : ''}`}>
+            <div ref={boxHeaderRef} className={`flex shrink-0 items-center justify-between px-4 py-3 md:pt-5 relative ${isMobileFocused ? 'bg-white/60 backdrop-blur-xl' : ''}`}>
             {isMobileFocused ? (
               <button
                 onClick={() => { setFocusedInput(null); setIsMenuOpen(false); }}
@@ -776,7 +762,7 @@ export default function App() {
             </div>
 
             {/* Main Content */}
-            <div ref={boxMainContentRef} className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-white relative">
+            <div ref={boxMainContentRef} className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-transparent relative">
             <AnimatePresence mode="wait" initial={false}>
             {isMenuOpen ? (
               <motion.div
@@ -876,7 +862,7 @@ export default function App() {
                     <div className="flex items-center justify-center w-5">
                       <div className="w-2 h-2 rounded-full bg-[#F26722]"></div>
                     </div>
-                    <div className={`flex-1 bg-gray-100 rounded-xl flex items-center px-4 transition-all duration-200 ${focusedInput === 'pickup' ? 'bg-white ring-2 ring-[#F26722] shadow-sm' : 'hover:bg-[#FEA000]/15'}`}>
+                    <div className={`flex-1 rounded-xl flex items-center px-4 border transition-all duration-200 ${focusedInput === 'pickup' ? 'bg-white border-transparent ring-2 ring-[#F26722] shadow-sm' : 'bg-white/90 border-gray-200 hover:bg-white hover:border-[#FEA000]/40'}`}>
                       <input
                         ref={pickupInputRef}
                         type="text"
@@ -910,7 +896,7 @@ export default function App() {
                     <div className="flex items-center justify-center w-5">
                       <div className="w-2 h-2 bg-[#F26722]"></div>
                     </div>
-                    <div className={`flex-1 bg-gray-100 rounded-xl flex items-center px-4 transition-all duration-200 ${focusedInput === 'dropoff' ? 'bg-white ring-2 ring-[#F26722] shadow-sm' : 'hover:bg-[#FEA000]/15'}`}>
+                    <div className={`flex-1 rounded-xl flex items-center px-4 border transition-all duration-200 ${focusedInput === 'dropoff' ? 'bg-white border-transparent ring-2 ring-[#F26722] shadow-sm' : 'bg-white/90 border-gray-200 hover:bg-white hover:border-[#FEA000]/40'}`}>
                       <input
                         ref={dropoffInputRef}
                         type="text"
@@ -1045,24 +1031,7 @@ export default function App() {
                       </button>
                     ))}
                   </div>
-                ) : (
-                  <div className="space-y-4 animate-in fade-in duration-300">
-                    <div className="flex gap-4">
-                      <button onClick={() => handleLocationSelect('home')} className="flex-1 bg-[#FEA000]/15 hover:bg-[#FEA000]/25 py-3.5 rounded-xl flex items-center justify-center gap-2.5 font-semibold text-sm transition-colors text-[#F26722]">
-                        <div className="w-7 h-7 bg-white rounded-full flex items-center justify-center shadow-sm">
-                          <Home size={14} className="text-[#F26722]" />
-                        </div>
-                        Home
-                      </button>
-                      <button onClick={() => handleLocationSelect('work')} className="flex-1 bg-[#FEA000]/15 hover:bg-[#FEA000]/25 py-3.5 rounded-xl flex items-center justify-center gap-2.5 font-semibold text-sm transition-colors text-[#F26722]">
-                        <div className="w-7 h-7 bg-white rounded-full flex items-center justify-center shadow-sm">
-                          <Briefcase size={14} className="text-[#F26722]" />
-                        </div>
-                        Work
-                      </button>
-                    </div>
-                  </div>
-                )}
+                ) : null}
               </div>
             </div>
 
@@ -1082,7 +1051,7 @@ export default function App() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.08, ease: "easeOut" }}
-              className="p-5 bg-white border-t border-gray-100 rounded-b-3xl w-full"
+              className="p-5 bg-white/55 backdrop-blur-xl border-t border-white/50 rounded-b-3xl w-full"
             >
               {routeMessage && (
                 <div className={`mb-3 rounded-xl px-4 py-3 text-sm font-semibold ${
