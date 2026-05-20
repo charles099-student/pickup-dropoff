@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
-import { Menu, MapPin, Navigation, ArrowDownUp, X, Clock, ChevronLeft, Home, Briefcase } from 'lucide-react';
+import { Menu, MapPin, Navigation, ArrowDownUp, X, Clock, ChevronLeft, Home, Briefcase, CheckCircle2 } from 'lucide-react';
 import { motion, AnimatePresence, useDragControls, useMotionValue } from 'motion/react';
 import maplibregl from 'maplibre-gl';
 import type { GeoJSONSource, Marker, StyleSpecification } from 'maplibre-gl';
@@ -17,7 +17,7 @@ const THEME_HEAT = '#F26722';
 const THEME_ORANGE_PEEL = '#FEA000';
 
 type RouteStatus = 'idle' | 'submitting' | 'polling' | 'success' | 'error';
-type FocusedInput = 'pickup' | 'dropoff';
+type FocusedInput = 'pickup' | 'dropoff' | 'setup';
 type LatLngPoint = { lat: number; lng: number };
 type PlaceSuggestion = {
   id: string;
@@ -32,14 +32,7 @@ type CustomLocation = {
   address: string;
 };
 
-type NominatimPlace = {
-  osm_id: number;
-  osm_type: string;
-  display_name: string;
-  name?: string;
-  lat: string;
-  lon: string;
-};
+
 
 type OsrmRouteResponse = {
   code: string;
@@ -156,41 +149,41 @@ function createWaypointMarker(index: number) {
   return element;
 }
 
-/*
- * Transforms a raw Nominatim API geographic place object into a structured
- * suggestion model suitable for UI address dropdowns.
- */
-function formatSuggestion(place: NominatimPlace): PlaceSuggestion {
-  const parts = place.display_name.split(',').map((part) => part.trim()).filter(Boolean);
-  return {
-    id: `${place.osm_type}-${place.osm_id}`,
-    address: place.display_name,
-    label: place.name || parts[0] || place.display_name,
-    secondary: parts.slice(1, 4).join(', '),
-  };
-}
+
+
+const HARDCODED_SUGGESTIONS: PlaceSuggestion[] = [
+  {
+    id: 'mock-1',
+    label: 'Innocentre',
+    secondary: 'Kowloon Tong, Hong Kong',
+    address: 'Innocentre, Hong Kong',
+  },
+  {
+    id: 'mock-2',
+    label: 'Hong Kong International Airport Terminal 1',
+    secondary: 'Chek Lap Kok, Hong Kong',
+    address: 'Hong Kong International Airport Terminal 1',
+  }
+];
 
 /*
- * Queries the OSM (Nominatim) search endpoint with the user's location input
- * and restructures the API response into a manageable PlaceSuggestion collection.
+ * Queries the local mock data instead of Nominatim, recognizing
+ * only Innocenter and HKIA Terminal 1.
  */
 async function fetchPlaceSuggestions(query: string, signal: AbortSignal) {
-  const searchParams = new URLSearchParams({
-    format: 'jsonv2',
-    addressdetails: '1',
-    limit: '5',
-    countrycodes: 'hk',
-    'accept-language': 'en',
-    q: query,
-  });
-  const response = await fetch(`${NOMINATIM_SEARCH_URL}?${searchParams.toString()}`, { signal });
-
-  if (!response.ok) {
-    throw new Error(`Address autocomplete failed with HTTP ${response.status}.`);
+  // Simulate network latency
+  await new Promise(resolve => setTimeout(resolve, 200));
+  if (signal.aborted) {
+    throw new DOMException('Aborted', 'AbortError');
   }
 
-  const places = (await response.json()) as NominatimPlace[];
-  return places.map(formatSuggestion);
+  const lowerQuery = query.toLowerCase();
+  return HARDCODED_SUGGESTIONS.filter(
+    (place) =>
+      place.label.toLowerCase().includes(lowerQuery) ||
+      place.secondary?.toLowerCase().includes(lowerQuery) ||
+      place.address.toLowerCase().includes(lowerQuery)
+  );
 }
 
 /*
@@ -266,6 +259,7 @@ export default function App() {
   const [placeSuggestions, setPlaceSuggestions] = useState<Record<FocusedInput, PlaceSuggestion[]>>({
     pickup: [],
     dropoff: [],
+    setup: [],
   });
   const [isMapReady, setIsMapReady] = useState(false);
   const [floatingBoxHeight, setFloatingBoxHeight] = useState<number | null>(null);
@@ -352,8 +346,9 @@ export default function App() {
   const clearAllInputs = useCallback(() => {
     setPickup('');
     setDropoff('');
+    setSetupAddress('');
     setFocusedInput(null);
-    setPlaceSuggestions({ pickup: [], dropoff: [] });
+    setPlaceSuggestions({ pickup: [], dropoff: [], setup: [] });
     resetRouteState();
   }, [resetRouteState]);
 
@@ -706,11 +701,12 @@ export default function App() {
   useEffect(() => {
     // Autocomplete is debounced and cancelled on every input change
     // Older Nominatim responses cannot replace newer suggestions.
-    const query = focusedInput === 'pickup' ? pickup.trim() : focusedInput === 'dropoff' ? dropoff.trim() : '';
+    const query = focusedInput === 'pickup' ? pickup : focusedInput === 'dropoff' ? dropoff : focusedInput === 'setup' ? setupAddress : '';
+    const trimmedQuery = query.trim();
 
     autocompleteAbortControllerRef.current?.abort();
 
-    if (!focusedInput || query.length < 3) {
+    if (!focusedInput || trimmedQuery.length < 3) {
       if (focusedInput) {
         setPlaceSuggestions((prev) => ({ ...prev, [focusedInput]: [] }));
       }
@@ -720,7 +716,7 @@ export default function App() {
     const abortController = new AbortController();
     autocompleteAbortControllerRef.current = abortController;
     const timer = window.setTimeout(() => {
-      fetchPlaceSuggestions(query, abortController.signal)
+      fetchPlaceSuggestions(trimmedQuery, abortController.signal)
         .then((suggestions) => {
           setPlaceSuggestions((prev) => ({ ...prev, [focusedInput]: suggestions }));
         })
@@ -735,7 +731,7 @@ export default function App() {
       window.clearTimeout(timer);
       abortController.abort();
     };
-  }, [dropoff, focusedInput, pickup]);
+  }, [dropoff, focusedInput, pickup, setupAddress]);
 
   useEffect(() => {
     // Render returned waypoints as markers first; OSRM then supplies the
@@ -1141,23 +1137,26 @@ export default function App() {
 
               {/* Autocomplete / Suggestions */}
               <div className="mt-4">
-                {focusedInput ? (
+                {(focusedInput === 'pickup' || focusedInput === 'dropoff') ? (
                   <div className="space-y-0 animate-in fade-in slide-in-from-bottom-2 duration-200">
-                    {/* Current Location Option */}
-                    {focusedInput === 'pickup' && (
-                      <button
-                        type="button"
-                        onClick={() => handleSuggestionSelect('pickup', 'Current Location, Hong Kong')}
-                        className="w-full text-left flex items-center gap-3 cursor-pointer hover:bg-[#FEA000]/10 p-2 -mx-2 rounded-xl transition-colors"
-                      >
-                        <div className="w-9 h-9 bg-[#FEA000]/20 rounded-full flex items-center justify-center text-[#F26722] shrink-0">
-                          <Navigation size={18} className="fill-current" />
-                        </div>
-                        <div className="flex-1 border-b border-gray-100 pb-2 mt-2">
-                          <div className="font-semibold text-gray-900 text-[15px]">Current Location</div>
-                        </div>
-                      </button>
-                    )}
+                    {/* Default Locations (Only show when not searching) */}
+                    {((focusedInput === 'pickup' ? pickup : dropoff).trim() === '') ? (
+                      <>
+                        {/* Current Location Option */}
+                        {focusedInput === 'pickup' && (
+                          <button
+                            type="button"
+                            onClick={() => handleSuggestionSelect('pickup', 'Current Location, Hong Kong')}
+                            className="w-full text-left flex items-center gap-3 cursor-pointer hover:bg-[#FEA000]/10 p-2 -mx-2 rounded-xl transition-colors"
+                          >
+                            <div className="w-9 h-9 bg-[#FEA000]/20 rounded-full flex items-center justify-center text-[#F26722] shrink-0">
+                              <Navigation size={18} className="fill-current" />
+                            </div>
+                            <div className="flex-1 border-b border-gray-100 pb-2 mt-2">
+                              <div className="font-semibold text-gray-900 text-[15px]">Current Location</div>
+                            </div>
+                          </button>
+                        )}
 
                     {/* Home Option */}
                     <button type="button" className="w-full text-left flex items-center gap-3 cursor-pointer hover:bg-[#FEA000]/10 p-2 -mx-2 rounded-xl transition-colors" onClick={() => handleLocationSelect('home')}>
@@ -1214,17 +1213,10 @@ export default function App() {
                         <div className="text-xs text-gray-500 mt-0.5">Kowloon Tong, Hong Kong</div>
                       </div>
                     </button>
+                    </>
+                    ) : null}
 
-                    <button type="button" onClick={() => handleSuggestionSelect(focusedInput, 'Central, Hong Kong')} className="w-full text-left flex items-center gap-3 cursor-pointer hover:bg-[#FEA000]/10 p-2 -mx-2 rounded-xl transition-colors">
-                      <div className="w-9 h-9 bg-[#FEA000]/15 rounded-full flex items-center justify-center text-[#F26722] shrink-0">
-                        <MapPin size={18} />
-                      </div>
-                      <div className="flex-1 border-b border-gray-100 pb-2 mt-2">
-                        <div className="font-semibold text-gray-900 text-[15px]">Central</div>
-                        <div className="text-xs text-gray-500 mt-0.5">Central, Hong Kong</div>
-                      </div>
-                    </button>
-
+                    {/* Autocomplete Search Results */}
                     {currentPlaceSuggestions.map((suggestion) => (
                       <button
                         key={suggestion.id}
@@ -1265,17 +1257,20 @@ export default function App() {
               className="p-5 bg-white/55 backdrop-blur-xl border-t border-white/50 rounded-b-3xl w-full"
             >
               {routeMessage && (
-                <div className={`mb-3 rounded-xl px-4 py-3 text-sm font-semibold ${
+                <div className={`mb-3 rounded-xl px-4 py-3 text-sm font-semibold flex flex-col ${
                   routeStatus === 'error'
                     ? 'bg-red-50 text-red-700'
                     : routeStatus === 'success'
                       ? 'bg-green-50 text-green-700'
                       : 'bg-gray-100 text-gray-700'
                 }`}>
-                  {routeStatus === 'error' && <span aria-hidden="true">⚠︎ </span>}
-                  {routeMessage}
+                  <div className="flex items-center gap-2">
+                    {routeStatus === 'error' && <span aria-hidden="true">⚠︎</span>}
+                    {routeStatus === 'success' && <CheckCircle2 size={16} className="text-green-700 shrink-0" />}
+                    <span>{routeMessage}</span>
+                  </div>
                   {routeSummary && (
-                    <div className="mt-1 text-xs font-medium opacity-80">
+                    <div className="mt-1 text-xs font-medium opacity-80 pl-6">
                       Distance {formatRouteMetric(routeSummary.totalDistance)} | Time {formatRouteMetric(routeSummary.totalTime)}
                     </div>
                   )}
@@ -1345,8 +1340,33 @@ export default function App() {
                 setSetupAddress(e.target.value);
                 setSetupError('');
               }}
+              onFocus={() => setFocusedInput('setup')}
               className="w-full bg-gray-100 rounded-xl px-4 py-3.5 text-base font-medium focus:outline-none focus:ring-2 focus:ring-[#F26722] mb-6 text-black placeholder:text-gray-500"
             />
+
+            {focusedInput === 'setup' && placeSuggestions.setup.length > 0 && (
+              <div className="mb-6 space-y-0 max-h-48 overflow-y-auto w-full -mt-4 border border-gray-100 rounded-b-xl border-t-0 p-2 shadow-sm">
+                {placeSuggestions.setup.map((suggestion) => (
+                  <button
+                    key={suggestion.id}
+                    type="button"
+                    onClick={() => {
+                      setSetupAddress(suggestion.address);
+                      setPlaceSuggestions((prev) => ({ ...prev, setup: [] }));
+                    }}
+                    className="w-full text-left flex items-center gap-3 cursor-pointer hover:bg-[#FEA000]/10 p-2 rounded-xl transition-colors"
+                  >
+                    <div className="w-8 h-8 bg-[#FEA000]/15 rounded-full flex items-center justify-center text-[#F26722] shrink-0">
+                      <MapPin size={16} />
+                    </div>
+                    <div className="flex-1 border-b border-gray-100 pb-2 mt-2 min-w-0">
+                      <div className="font-semibold text-gray-900 text-[14px] truncate">{suggestion.label}</div>
+                      <div className="text-xs text-gray-500 mt-0.5 truncate">{suggestion.secondary || suggestion.address}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
 
             <div className="flex gap-3">
               <button

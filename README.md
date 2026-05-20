@@ -4,12 +4,32 @@ This is a Vite + React web application that lets a user enter one pickup address
 
 The application uses public web services:
 
-- Lalamove mock route API: submits the pickup/drop-off request and polls for route status.
+- A mock route API: submits the pickup/drop-off request and polls for route status.
 - OpenFreeMap with MapLibre GL JS: renders the interactive map.
-- OpenStreetMap Nominatim: provides address autocomplete.
+- Mock API Address Autocomplete: predicts recognized locations (i.e. Innocentre, Hong Kong International Airport) using mock local data based on input.
 - OSRM public route API: converts returned waypoints into road-following route geometry.
 
 No map API key is required in this project.
+
+## How to Use the Web App
+
+1. **Enter Pickup Location:** Click on the "Pickup" input field and start typing your location.
+2. **Enter Drop-off Location:** Similarly, click on the "Drop-off" input field, type your destination, and choose from the suggestions.
+3. **Request Route:** Once both locations are set, submit the form to request the route.
+4. **View the Map:** The app will fetch the route data from the server and draw the optimal driving path on the map after being processed by the mock route API and OSRM (Open Source Routing Machine). The map should automatically adjust to fit both the pickup and drop-off points.
+5. **Manage Saved Locations:** You can save frequently used addresses (like "Home" or "Work") for quicker route planning.
+
+## More Features & Functions
+
+- **Address Autocomplete:** Instant search suggestions as you type, simulating live autocomplete behavior but using local mocked data to predict specific recognized places instead of an external API.
+- **Mobile-Friendly Layout:** Responsive design that provides a bottom-sheet styled interface on mobile devices and a floating side panel on desktop.
+
+## Some Design Highlights
+
+- **Floating Panel Interface:** On large screens, the controls are housed in a sleek floating panel overlay on top of the fullscreen map. On mobile, it adapts into a drag-to-expand bottom drawer for natural thumb-reach interaction.
+- **Map-Centric Experience:** The map remains the primary focus. Markers and route lines use high-visibility theme colors (e.g., distinct orange tones) that contrast well against the base map.
+- **Loading & Error States:** Provides immediate visual feedback during route polling or when an error occurs.
+- **Smooth Animations:** Integrated with `motion/react` (Framer Motion) to display fluid entrance, exit, and transition animations for dropdowns, drawers, and state changes.
 
 ## Requirements for using and/or testing the Web app
 
