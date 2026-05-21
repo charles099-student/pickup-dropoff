@@ -1,17 +1,17 @@
-# Pickup Dropoff
+# Pickup - Dropoff Web App
 
-This is a Vite + React web application that lets a user enter one pickup address and one drop-off address, request a route, and view the route on an interactive MapLibre map.
+This is a Vite + React web app that lets a user enter one pickup address and one drop-off address, request a route, and view the route on an interactive MapLibre map.
 
-The application uses public web services:
+The app uses public web services:
 
-- A mock route API: submits the pickup/drop-off request and polls for route status.
+- Mock Route API: submits the pickup/drop-off request and polls for route status.
 - OpenFreeMap with MapLibre GL JS: renders the interactive map.
 - Mock API Address Autocomplete: predicts recognized locations (i.e. Innocentre, Hong Kong International Airport) using mock local data based on input.
 - OSRM public route API: converts returned waypoints into road-following route geometry.
 
 No map API key is required in this project.
 
-## How to Use the Web App
+## Using the Web App
 
 1. **Enter Pickup Location:** Click on the "Pickup" input field and start typing your location.
 2. **Enter Drop-off Location:** Similarly, click on the "Drop-off" input field, type your destination, and choose from the suggestions.
@@ -19,17 +19,16 @@ No map API key is required in this project.
 4. **View the Map:** The app will fetch the route data from the server and draw the optimal driving path on the map after being processed by the mock route API and OSRM (Open Source Routing Machine). The map should automatically adjust to fit both the pickup and drop-off points.
 5. **Manage Saved Locations:** You can save frequently used addresses (like "Home" or "Work") for quicker route planning.
 
-## More Features & Functions
+## More Features / Functions
 
 - **Address Autocomplete:** Instant search suggestions as you type, simulating live autocomplete behavior but using local mocked data to predict specific recognized places instead of an external API.
 - **Mobile-Friendly Layout:** Responsive design that provides a bottom-sheet styled interface on mobile devices and a floating side panel on desktop.
 
 ## Some Design Highlights
 
-- **Floating Panel Interface:** On large screens, the controls are housed in a sleek floating panel overlay on top of the fullscreen map. On mobile, it adapts into a drag-to-expand bottom drawer for natural thumb-reach interaction.
-- **Map-Centric Experience:** The map remains the primary focus. Markers and route lines use high-visibility theme colors (e.g., distinct orange tones) that contrast well against the base map.
+- **Panel Design:** On large screens, the controls are housed in a sleek floating panel overlay on top of the fullscreen map. On mobile, it adapts into a drag-to-expand bottom drawer for natural thumb-reach interaction.
 - **Loading & Error States:** Provides immediate visual feedback during route polling or when an error occurs.
-- **Smooth Animations:** Integrated with `motion/react` (Framer Motion) to display fluid entrance, exit, and transition animations for dropdowns, drawers, and state changes.
+- **UI Animations:** Integrated with `motion/react` (Framer Motion) to display fluid entrance, exit, and transition animations for dropdowns, drawers, and state changes.
 
 ## Requirements for using and/or testing the Web app
 
@@ -61,7 +60,7 @@ git clone https://github.com/charles099-student/pickup-dropoff.git
 cd pickup-dropoff
 ```
 
-## Starting the Application
+## Starting the app
 
 Install dependencies:
 
@@ -77,7 +76,7 @@ npm run dev
 
 The Vite dev server is configured in `vite.config.ts` to run on port `8001`.
 
-Open the application in a browser:
+Open the app in a browser:
 
 ```text
 http://localhost:8001
@@ -107,7 +106,7 @@ To run tests in watch mode (reruns tests when files change):
 npm run test:watch
 ```
 
-Recommended components and behaviours to unit test:
+Recommended components / behaviours to unit test:
 
 - The main `App` UI components and interaction states in `src/test/`.
 - `parseRoutePath` in `src/app/routeApi.ts`: converts backend latitude/longitude strings into numbers and rejects invalid coordinates.
@@ -152,7 +151,7 @@ Supported browser targets:
 - Google Chrome
 - Microsoft Edge
 - Mozilla Firefox
-- Safari
+- Apple Safari
 
 Map rendering requires WebGL. If WebGL is disabled or unavailable, the map may not render correctly even if the rest of the React interface loads.
 
@@ -182,4 +181,4 @@ Open:
 http://localhost:4173
 ```
 
-Deploy the contents of `dist/` to any static web host, such as GitHub Pages, Netlify, Vercel, Firebase Hosting, or an Nginx/Apache static site. If the host supports single-page applications, configure fallback routing to `index.html`.
+Deploy the contents of `dist/` to any static web host, such as GitHub Pages, Netlify, Vercel, Firebase Hosting, or an Nginx/Apache static site. If the host supports single-page apps, configure fallback routing to `index.html`.
